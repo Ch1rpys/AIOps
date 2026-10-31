@@ -174,12 +174,29 @@ def test_mac_launcher_passes_arm64_and_stops_on_startup_failure(tmp_path, startu
     for name, body in {
         "uname": f"print('Darwin' if sys.argv[1] == '-s' else '{machine}')",
         "sysctl": "print('1')",
-        "curl": "sys.exit(0)",
+        "curl": """
+with open(os.environ['AIOPS_TEST_CURL_CALLS'], 'a') as stream:
+    stream.write('x')
+sys.exit(0)
+""",
         "ssh": """
 with open(os.environ['AIOPS_TEST_SSH_CALLS'], 'a') as stream:
     stream.write(json.dumps(sys.argv[1:]) + '\\n')
 if '-N' in sys.argv:
-    time.sleep(0.5)
+    # 隧道必须存活到就绪检查结束。用 curl 调用计数作为确定性信号，
+    # 不用固定 sleep，避免机器负载高时与就绪检查产生竞态。
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        try:
+            with open(os.environ['AIOPS_TEST_CURL_CALLS']) as stream:
+                if stream.read().count('x') >= 2:
+                    break
+        except OSError:
+            pass
+        time.sleep(0.05)
+    # 就绪检查的最后一次 kill -0 紧随第二次 curl，留出稳定余量再退出。
+    time.sleep(1)
+    sys.exit(0)
 else:
     sys.exit(int(os.environ['AIOPS_TEST_STARTUP_EXIT']))
 """,
@@ -190,6 +207,7 @@ else:
         )
         stub.chmod(0o700)
     calls_file = tmp_path / "calls.jsonl"
+    curl_calls_file = tmp_path / "curl_calls.txt"
     result = subprocess.run(
         [
             "bash",
@@ -202,6 +220,7 @@ else:
             **os.environ,
             "PATH": f"{tmp_path}:{os.environ['PATH']}",
             "AIOPS_TEST_SSH_CALLS": str(calls_file),
+            "AIOPS_TEST_CURL_CALLS": str(curl_calls_file),
             "AIOPS_TEST_STARTUP_EXIT": str(startup_exit),
         },
         capture_output=True,
