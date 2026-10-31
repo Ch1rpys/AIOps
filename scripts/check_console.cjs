@@ -102,7 +102,8 @@ async function run() {
         .getByRole("button", { name: "基线探针", exact: true })
         .click();
       await realPage.getByText("mysql_select_1", { exact: true }).waitFor();
-      assert.equal(await realPage.locator("tbody tr").count(), 6);
+      // 页面上同时存在「核心依赖状态」表和基线探针表，必须只统计探针行。
+      assert.equal(await realPage.locator("tbody tr:has(.probe-observation)").count(), 6);
       await realPage.locator(".probe-observation summary").first().click();
       assert.ok(
         (
@@ -158,7 +159,7 @@ async function run() {
         await noOverflow(realPage);
       }
       const downloadPromise = realPage.waitForEvent("download");
-      await realPage.getByRole("link", { name: "下载报告 ↓" }).click();
+      await realPage.getByRole("link", { name: "下载报告", exact: true }).click();
       const download = await downloadPromise;
       assert.ok(download.suggestedFilename().endsWith(".md"));
     },
@@ -236,11 +237,15 @@ async function run() {
       }
     },
   );
-  const scenarios = ["MYSQL_DOWN", "REDIS_DOWN", "NGINX_502"];
+  const scenarios = [
+    { key: "MYSQL_DOWN", target: "demo-mysql" },
+    { key: "REDIS_DOWN", target: "demo-redis" },
+    { key: "NGINX_502", target: "demo-app" },
+  ];
   let sample;
   for (const [index, scenario] of scenarios.entries()) {
     await check(
-      `TEST/MOCK ${scenario}: correct injection, waiting refresh, ${index === 1 ? "rejection" : "approval"}`,
+      `TEST/MOCK ${scenario.key}: correct injection, waiting refresh, ${index === 1 ? "rejection" : "approval"}`,
       async () => {
         await page.goto(`${base}/lab`);
         await page
@@ -255,12 +260,16 @@ async function run() {
         await waitEnabled(inject);
         await inject.click();
         const dialog = page.getByRole("dialog");
-        assert.ok((await dialog.innerText()).includes(scenario));
+        // 确认对话框必须展示该场景的真实目标容器，而不是场景编码。
+        assert.ok(
+          (await dialog.innerText()).includes(scenario.target),
+          `Dialog must show the real target ${scenario.target}`,
+        );
         await dialog.getByRole("button", { name: "确认停止并注入" }).click();
         await page.getByRole("heading", { name: "根因诊断" }).waitFor();
         assert.equal(
           injectionPaths.at(-1),
-          `/api/scenarios/${scenario}/inject`,
+          `/api/scenarios/${scenario.key}/inject`,
         );
         assert.equal(
           await page.locator(".sample-details").count(),
@@ -268,7 +277,8 @@ async function run() {
           "No fake verification samples",
         );
         await page.getByText("尚未取得复测采样。", { exact: true }).waitFor();
-        await page.getByRole("button", { name: "开始智能诊断" }).click();
+        // 页头与根因卡片空状态各有一个「开始智能诊断」，行为一致，取第一个。
+        await page.getByRole("button", { name: "开始智能诊断" }).first().click();
         await page
           .getByRole("button", { name: "批准并执行", exact: true })
           .waitFor();
