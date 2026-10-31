@@ -14,6 +14,26 @@
 
 ## 仓库协作与本机文件
 
+本项目统一使用 [GitHub 仓库](https://github.com/Ch1rpys/AIOps)，默认分支为 `main`。首次获取代码：
+
+```bash
+git clone https://github.com/Ch1rpys/AIOps.git
+cd AIOps
+```
+
+已有克隆的成员应确认 `git remote -v` 指向上述仓库。在工作区干净时先同步，修改并通过相关检查后再提交：
+
+```bash
+git pull --ff-only
+# 修改代码并运行相关检查后，核对待提交文件。
+git status --short
+git add <本次修改的文件路径>
+git commit -m "说明本次修改"
+git push
+```
+
+组员推送后，再执行 `git pull --ff-only` 获取更新。若提示分支已分叉或推送被拒绝，先 `git fetch origin` 检查差异并合并解决冲突，再推送；不要强制覆盖。多人同时开发时建议各自建立功能分支，通过 Pull Request 合并到 `main`。
+
 提交源码、测试、`uv.lock`、`frontend/package-lock.json`、`.env.example`、Compose、启动脚本及部署说明。每位成员从 `.env.example` 创建自己的 `.env` 并填写配置，在自己的系统上重新安装依赖。
 
 `.gitignore` 排除本机凭据、`data/`（SQLite、检查点、SSH 资料、日志和验收输出）、缓存、依赖、构建产物、编辑器/开发工具配置、开发过程文档及虚拟机镜像。这些文件保留在本机；不需要把 Windows 的虚拟机、`.venv` 或 `node_modules` 发给组员。原始记录如需提交验收，应先脱敏，再单独整理为正式交付资料。
