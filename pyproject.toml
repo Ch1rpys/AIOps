@@ -1,0 +1,36 @@
+[project]
+name = "aiops-verification-platform"
+version = "0.1.0"
+description = "本机隔离的 AIOps 故障诊断与处置验证 MVP"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.34,<1",
+  "httpx>=0.28,<1",
+  "pydantic>=2.11,<3",
+  "pydantic-settings>=2.8,<3",
+  "sqlalchemy>=2.0,<2.1",
+  "langgraph>=1.0,<2",
+  "langgraph-checkpoint-sqlite>=3,<4",
+  "pymysql[rsa]>=1.1,<2",
+  "redis>=5,<7",
+  "filelock>=3.18,<4",
+]
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "ruff>=0.12,<1", "pyyaml>=6,<7"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".cache", ".venv", "frontend/node_modules", "data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+pythonpath = ["backend"]

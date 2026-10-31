@@ -1,0 +1,11 @@
+# 首轮使用证据上下文模式；不授予工具、主机凭据或 Docker Socket。
+# 0.45.0 默认启用的核心工具必须显式关闭；Adapter 还会检查运行时清单。
+toolsets:
+  core_investigation: {enabled: false}
+  bash: {enabled: false}
+  internet: {enabled: false}
+  connectivity_check: {enabled: false}
+  skills: {enabled: false}
+  kubernetes/core: {enabled: false}
+  kubernetes/logs: {enabled: false}
+  docker/core: {enabled: false}

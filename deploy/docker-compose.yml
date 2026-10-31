@@ -1,0 +1,76 @@
+name: aiops-demo
+services:
+  demo-mysql:
+    image: mysql:8.4.7
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DEMO_MYSQL_ROOT_PASSWORD:?set DEMO_MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: demo
+      MYSQL_USER: demo
+      MYSQL_PASSWORD: ${DEMO_MYSQL_PASSWORD:?set DEMO_MYSQL_PASSWORD}
+    ports: ["127.0.0.1:${MYSQL_PORT:-13306}:3306"]
+    volumes: ["mysql-data:/var/lib/mysql"]
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_PASSWORD mysql -u demo -D demo -Nse 'SELECT 1' | grep -qx 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+
+  demo-redis:
+    image: redis:7.4.7
+    ports: ["127.0.0.1:${REDIS_PORT:-16379}:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "PING"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  demo-app:
+    build: {context: ../demo/demo-app}
+    environment:
+      MYSQL_HOST: demo-mysql
+      MYSQL_PORT: "3306"
+      DEMO_MYSQL_PASSWORD: ${DEMO_MYSQL_PASSWORD:?set DEMO_MYSQL_PASSWORD}
+      REDIS_HOST: demo-redis
+    ports: ["127.0.0.1:18000:8000"]
+    depends_on:
+      demo-mysql: {condition: service_healthy}
+      demo-redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  demo-nginx:
+    image: nginx:1.28.0-alpine
+    ports: ["127.0.0.1:18080:80"]
+    volumes: ["../demo/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro"]
+    depends_on:
+      demo-app: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/api/hello"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  holmes:
+    image: us-central1-docker.pkg.dev/genuine-flight-317411/devel/holmes:0.45.0@sha256:a6edc27204a8725d45419863474c41e2822333e938a8e79fafb99068131629c3
+    entrypoint: ["python", "-u", "server.py"]
+    ports: ["127.0.0.1:5050:5050"]
+    environment:
+      # 空模型配置不阻止独立检查 demo 环境；真实诊断仍必须通过 Adapter 和验收。
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API:-}
+      MODEL: ${HOLMES_MODEL:-}
+      HOLMES_API_KEY: ${HOLMES_API_KEY:-}
+      LOG_LEVEL: WARNING
+    volumes: ["./holmes-config.yaml:/root/.holmes/config.yaml:ro"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5050/healthz')"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  mysql-data:
