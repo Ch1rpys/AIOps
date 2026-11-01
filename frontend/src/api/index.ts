@@ -18,6 +18,12 @@ async function request<T>(path: string, method = 'GET', body?: unknown, key?: st
     }
     const payload = await response.json();
     if (!response.ok) {
+      if (payload.error?.code === 'FORBIDDEN') {
+        // 令牌只保存在页面内存，刷新即失效；错误提示需直接指出下一步。
+        throw new Error(
+          'FORBIDDEN · 令牌不匹配或已失效，请在右上角「设置」中重新粘贴 .env 里 ADMIN_TOKEN= 后面的值',
+        );
+      }
       throw new Error(
         `${payload.error?.code ?? response.status} · ${payload.error?.message ?? '请求失败'}`,
       );

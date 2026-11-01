@@ -154,6 +154,26 @@ def test_auth_origin_and_confirmation(client):
     )
 
 
+def test_admin_token_tolerates_surrounding_whitespace_but_rejects_wrong_value(client, settings):
+    token = settings.admin_token.get_secret_value()
+    body = {"confirm": True}
+    for candidate in (token, f"  {token}  ", f"{token}\n"):
+        response = client.post(
+            "/api/lab/reset",
+            json=body,
+            headers={"X-Admin-Token": candidate, "Idempotency-Key": "TEST-space-token"},
+        )
+        assert response.status_code == 200, response.text
+    assert (
+        client.post(
+            "/api/lab/reset",
+            json=body,
+            headers={"X-Admin-Token": "wrong-token", "Idempotency-Key": "TEST-wrong-token"},
+        ).status_code
+        == 403
+    )
+
+
 def test_stale_or_forged_approval_before_diagnosis(client, world):
     incident_id = injected(client)
     assert approve(client, incident_id, "plan-forged").status_code == 409

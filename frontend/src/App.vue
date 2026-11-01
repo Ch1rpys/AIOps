@@ -34,6 +34,13 @@ function isActive(path: string) {
     : route.path === path && !(path === '/environment' && route.query.tab === 'probes');
 }
 
+// 粘贴 .env 里的整行也能识别；正常令牌是纯十六进制，不含 '='。
+function onTokenInput(value: string) {
+  const trimmed = value.trim();
+  const matched = /^ADMIN_TOKEN\s*=\s*(.+)$/i.exec(trimmed);
+  adminToken.value = matched ? matched[1].trim() : trimmed;
+}
+
 // 限制最近工单最多展示 4 条 (V1-01)
 const recentDisplay = computed(() => recent.value.slice(0, 4));
 
@@ -184,7 +191,8 @@ watch(() => route.fullPath, loadRecent);
     <label for="admin-token" class="field-label">本机管理员令牌</label>
     <ElInput
       id="admin-token"
-      v-model="adminToken"
+      :model-value="adminToken"
+      @update:model-value="onTokenInput"
       type="password"
       show-password
       placeholder="请输入 ADMIN_TOKEN"

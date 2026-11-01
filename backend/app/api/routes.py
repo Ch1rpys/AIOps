@@ -25,8 +25,14 @@ def require_admin(
     expected = request.app.state.platform.settings.admin_token.get_secret_value()
     if not expected:
         raise DomainError("ADMIN_NOT_CONFIGURED", "未设置 ADMIN_TOKEN，写操作不可用", 503)
-    if not token or not hmac.compare_digest(token.encode(), expected.encode()):
-        raise DomainError("FORBIDDEN", "操作需要本机管理员令牌", 403)
+    # 粘贴时常见的尾部换行或空格不应导致令牌被误判为错误。
+    provided = (token or "").strip()
+    if not provided or not hmac.compare_digest(provided.encode(), expected.encode()):
+        raise DomainError(
+            "FORBIDDEN",
+            "操作需要本机管理员令牌；请在右上角设置中粘贴 .env 里 ADMIN_TOKEN= 后面的值",
+            403,
+        )
 
 
 admin = [Depends(require_admin)]
