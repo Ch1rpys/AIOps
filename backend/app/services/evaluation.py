@@ -133,14 +133,15 @@ class EvaluationService:
                     "message": message,
                     "model_calls": 0,
                     "extra_collects": 0,
-                    "timing": {"total_ms": 0},
+                    # 没跑成就没有耗时：写 0 等于伪造一个「0 毫秒」的实测值（§9.3）。
+                    "timing": None,
                 },
                 correct=None,
                 rejected=0,
                 # 故障是否成立尚未确认：不能写 0（那表示「确认过但不成立」）。
                 fault_present=None,
-                model_calls=0,
-                latency_ms=0,
+                model_calls=None,
+                latency_ms=None,
                 token_usage=None,
                 created_at=now(),
             )

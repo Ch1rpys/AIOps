@@ -268,3 +268,24 @@ def test_capability_check_runs_once_per_experiment(client, world):
     """一次实验只核验一次版本与工具权限：否则单臂最坏耗时突破 45 秒预算。"""
     trigger(client)
     assert world.capability_checks == 1
+
+
+def test_failed_run_does_not_report_zero_measurements(client, world):
+    """没跑成的实验不能报「0 毫秒」：0 是伪造的实测值，不是未知（§9.3）。"""
+    world.stop_has_no_effect = True  # 注入后故障没出现 → 实验失败
+    trigger(client)
+    rows = runs(client)
+    assert rows
+    for row in rows:
+        assert row["latency_ms"] is None
+        assert row["model_calls"] is None
+        assert row["fault_present"] is None
+    summary = client.get("/api/evaluation/summary").json()
+    arm = next(item for item in summary["arms"] if item["arm"] == "A")
+    # 没有可用样本时，时间与调用次数都应是「未知」，不是 0。
+    assert arm["avg_latency_ms"] is None
+    assert arm["model_calls_avg"] is None
+    assert arm["timing"]["model_ms"] is None
+    assert arm["timing"]["collect_ms"] is None
+    assert arm["timing"]["experiment_total_ms"] is None
+    assert arm["token_usage_total"] is None
