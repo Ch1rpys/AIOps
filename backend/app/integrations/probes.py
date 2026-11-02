@@ -176,9 +176,15 @@ class Probes:
         failures = 0
         consecutive = 0
         started = time.monotonic()
+        # 窗口开启时给间隔兜底：间隔为 0 会让「观察窗口秒数」永远采不满。
+        sleep_interval = (
+            max(self.settings.verification_interval, 0.1)
+            if window_enabled
+            else self.settings.verification_interval
+        )
         for index in range(limit):
             if index:
-                time.sleep(self.settings.verification_interval)
+                time.sleep(sleep_interval)
             sample = self.for_scenario(scenario)
             samples.append(sample)
             on_sample(sample)

@@ -11,12 +11,15 @@
 import base64
 import binascii
 import hashlib
+import logging
 from pathlib import Path
 
 from app.agents.evidence import attachment_conflict
 from app.config import DomainError, Settings
 from app.integrations.vision import VisionProvider
 from app.schemas.domain import Probe, now
+
+logger = logging.getLogger(__name__)
 
 ALLOWED_MIME = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
 
@@ -84,6 +87,17 @@ class AttachmentService:
             "uncertain": [],
             "model": self.settings.vision_model or "not_configured",
         }
+
+    def discard(self, attachment: dict) -> None:
+        """删除没有被任何工单引用的附件文件（分析失败时的孤儿文件）。"""
+        storage = attachment.get("storage")
+        if not storage:
+            return
+        path = self.settings.data_dir / storage
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("attachment_discard_failed storage=%s", storage)
 
     def analyze(self, attachment: dict, note: str = "") -> dict:
         """调用视觉模型提取观测，并补齐「时间未知」等显式标注。"""

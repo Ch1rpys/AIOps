@@ -45,8 +45,13 @@ def end_to_end_summary(store: Store) -> dict:
                         # 没有对应的已校验计划记录 = 被白名单门禁拦下。
                         blocked += 1
             if row.kind == "step":
-                phase = (row.payload or {}).get("phase")
-                if phase in {"DIAGNOSING", "PLANNING"}:
+                payload = row.payload or {}
+                phase = payload.get("phase")
+                # 执行许可门禁不是模型调用：不能计入调用次数。
+                if (
+                    phase in {"DIAGNOSING", "PLANNING"}
+                    and payload.get("step_kind") != "AUTHORIZING"
+                ):
                     model_calls += 1
         if any(row.kind == "execution" for row in rows):
             executed += 1
@@ -65,6 +70,7 @@ def end_to_end_summary(store: Store) -> dict:
         "recovery_success_rate": round(recovered / executed, 4) if executed else None,
         "model_calls": model_calls,
         "model_calls_avg": round(model_calls / len(incidents), 2) if incidents else None,
+        "model_calls_unknown": 0,
         "note": "端到端指标只统计闭环路径真实产生的处置提议；纯诊断对照不适用。",
     }
 

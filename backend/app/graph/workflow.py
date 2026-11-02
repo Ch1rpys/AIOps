@@ -120,6 +120,8 @@ class Workflow:
 
         例如执行许可校验与诊断都发生在 DIAGNOSING 状态，
         但只有诊断那一步真的调用了模型，统计模型调用次数时不能把门禁算进去。
+        标签单独记在 step_kind 里，phase 保持不变 ——
+        前端的六个阶段是按 phase 渲染的，门禁失败要能显示在「诊断」这一格里。
         """
         started_at, start = now(), time.monotonic()
         self.phase(state, phase)
@@ -158,7 +160,8 @@ class Workflow:
         record = {
             "run_id": state["run_id"],
             "attempt": state["attempt"],
-            "phase": label or phase,
+            "phase": phase,
+            "step_kind": label or phase,
             "status": outcome,
             "started_at": started_at,
             "ended_at": now(),

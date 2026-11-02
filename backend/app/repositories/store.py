@@ -241,7 +241,7 @@ class Store:
     # ---- 评测：租约、实验落库与聚合 ------------------------------------------
 
     def evaluation_busy(self) -> bool:
-        with self.session() as session:
+        with self.session() as session, session.begin():
             lease = session.get(EvaluationLease, 1)
             if lease is None:
                 return False
@@ -266,12 +266,14 @@ class Store:
         with self.session() as session:
             return session.get(LabLease, 1) is not None
 
-    def clear_expired_leases(self) -> None:
-        """清掉过期租约（评测租约与工作台租约）。"""
+    def clear_expired_leases(self) -> bool:
+        """清掉过期租约（评测租约与工作台租约），返回是否真的清掉了。"""
         with self.session() as session, session.begin():
             lease = session.get(EvaluationLease, 1)
             if lease is not None and self.lease_expired(lease):
                 session.delete(lease)
+                return True
+            return False
 
     def acquire_evaluation_lease(self, holder: str) -> None:
         with self.session() as session, session.begin():
@@ -411,6 +413,7 @@ class Store:
                     "timing_samples": 0,
                     "token_usage_known": 0,
                     "token_usage_total": 0,
+                    "token_usage_partial": 0,
                 },
             )
             bucket["runs"] += 1
@@ -435,10 +438,14 @@ class Store:
                 bucket["experiment_total_ms_total"] += int(experiment_total)
             usage = item.token_usage
             if isinstance(usage, dict) and usage:
-                bucket["token_usage_known"] += 1
-                bucket["token_usage_total"] += sum(
-                    value for value in usage.values() if isinstance(value, int)
-                )
+                if diagnosis.get("usage_partial"):
+                    # 只是部分已知：不能当成全量进总量，单独计数。
+                    bucket["token_usage_partial"] += 1
+                else:
+                    bucket["token_usage_known"] += 1
+                    bucket["token_usage_total"] += sum(
+                        value for value in usage.values() if isinstance(value, int)
+                    )
             bucket["contract_violations"] += len(diagnosis.get("contract_violations", []) or [])
             if item.latency_ms is not None:
                 bucket["latency_total_ms"] += item.latency_ms
@@ -471,7 +478,9 @@ class Store:
             # token 取不到就标「未知」，不用 0 顶替，也不做部分求和。
             token_total = (
                 bucket["token_usage_total"]
-                if bucket["token_usage_known"] == bucket["runs"] and bucket["runs"]
+                if bucket["runs"]
+                and bucket["token_usage_known"] == bucket["runs"]
+                and not bucket["token_usage_partial"]
                 else None
             )
             result.append(
@@ -513,6 +522,7 @@ class Store:
                     },
                     "token_usage_total": token_total,
                     "token_usage_known": bucket["token_usage_known"],
+                    "token_usage_partial": bucket["token_usage_partial"],
                 }
             )
         return {

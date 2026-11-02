@@ -37,19 +37,23 @@ PROMPT_VERSION = "blind-v1"
 EXCLUDED_STATUS = {"BUDGET_EXCEEDED", "ERROR"}
 
 
-def merge_usage(first: dict | None, second: dict | None) -> dict | None:
-    """合并两次模型调用的 token 用量。
+def merge_usage(first: dict | None, second: dict | None) -> tuple[dict | None, bool]:
+    """合并两次模型调用的 token 用量，返回（用量，是否只是部分已知）。
 
-    只有一份已知时不能当成总量 —— 报告里要标「部分已知」。
+    只有一份已知、或两份的字段集合不一致时，不能当成总量 ——
+    汇总里要把这种用量排除在总量之外，否则会把「少算」显示成「全量」。
     """
     if first is None and second is None:
-        return None
+        return None, False
+    fields_first = set(first or {})
+    fields_second = set(second or {})
     merged: dict[str, int] = {}
     for usage in (first or {}, second or {}):
         for key, value in usage.items():
             if isinstance(value, int):
                 merged[key] = merged.get(key, 0) + value
-    return merged or None
+    partial = bool(first) != bool(second) or fields_first != fields_second
+    return (merged or None), partial
 
 
 class Budget:
@@ -290,6 +294,13 @@ class EvaluationService:
             # 任何异常都要留下记录：失败样本不能凭空消失（§9.3）。
             code = error.code if isinstance(error, DomainError) else type(error).__name__
             message = error.message if isinstance(error, DomainError) else str(error)
+            # 模型调用自身的失败已由各臂记录（次数与耗时都是真实值）；
+            # 这里兜底的是臂外的意外异常，不重复计费。
+            record = {
+                **record,
+                "model_calls": budget.calls,
+                "model_ms": record.get("model_ms", 0) or 0,
+            }
             if code == "EVALUATION_BUDGET_EXCEEDED":
                 record = {**record, "status": "BUDGET_EXCEEDED", "message": message}
             elif code == "AI_INVALID_RESPONSE":
@@ -328,9 +339,17 @@ class EvaluationService:
         """A 臂：单次诊断，纯文本证据。"""
         trace = ModelTrace()
         budget.check()
-        diagnosis = self.provider.diagnose_domain(
-            payload, required_ids=required, timeout=timeout, trace=trace
-        )
+        try:
+            diagnosis = self.provider.diagnose_domain(
+                payload,
+                required_ids=required,
+                timeout=timeout,
+                trace=trace,
+                # 版本与工具权限已在实验开始时核验过（ensure_capabilities）。
+                verify_capabilities=False,
+            )
+        except Exception as error:
+            return self._call_failed(error, budget, trace)
         budget.charge()
         return {
             "status": "COMPLETED",
@@ -343,6 +362,30 @@ class EvaluationService:
             "model_ms": trace.latency_ms,
             "usage": trace.usage,
             "contract_violations": self._violations(diagnosis, snapshot),
+        }
+
+    @staticmethod
+    def _call_failed(error: Exception, budget: Budget, trace: ModelTrace) -> dict:
+        """模型调用失败：请求已经发出，次数与耗时都要算，token 仍是未知。
+
+        不把失败记成「0 次调用、0 毫秒」：那是伪造的实测值（§9.3）。
+        """
+        code = error.code if isinstance(error, DomainError) else type(error).__name__
+        message = error.message if isinstance(error, DomainError) else str(error)
+        budget.charge()
+        status = (
+            "BUDGET_EXCEEDED"
+            if code == "EVALUATION_BUDGET_EXCEEDED"
+            else ("INVALID_RESPONSE" if code == "AI_INVALID_RESPONSE" else "ERROR")
+        )
+        return {
+            "status": status,
+            "code": code,
+            "message": message,
+            "model_calls": budget.calls,
+            "model_ms": trace.latency_ms,
+            "usage": trace.usage,
+            "usage_partial": True,
         }
 
     def _arm_b(
@@ -361,13 +404,16 @@ class EvaluationService:
         """
         first_trace = ModelTrace()
         budget.check()
-        first = self.provider.diagnose_domain(
-            payload,
-            required_ids=required,
-            timeout=timeout,
-            trace=first_trace,
-            verify_capabilities=False,
-        )
+        try:
+            first = self.provider.diagnose_domain(
+                payload,
+                required_ids=required,
+                timeout=timeout,
+                trace=first_trace,
+                verify_capabilities=False,
+            )
+        except Exception as error:
+            return self._call_failed(error, budget, first_trace)
         budget.charge()
 
         review_trace = ModelTrace()
@@ -380,19 +426,21 @@ class EvaluationService:
                 trace=review_trace,
                 verify_capabilities=False,
             )
-        except DomainError as error:
+        except Exception as error:
             # 复核失败也要留下第一次的原始结论：失败与原始输出全部落库，不美化（§9.3）。
+            budget.charge()  # 复核请求已经发出：次数要算上
+            code = error.code if isinstance(error, DomainError) else type(error).__name__
             return {
                 "status": "ERROR",
-                "code": error.code,
-                "message": error.message,
+                "code": code,
+                "message": error.message if isinstance(error, DomainError) else str(error),
                 "root_cause": first.root_cause,
                 "evidence_sufficient": first.evidence_sufficient,
                 "summary": first.summary,
                 "evidence_ids": list(first.evidence_ids),
                 "confidence": first.confidence,
                 "model_calls": budget.calls,
-                "model_ms": first_trace.latency_ms,
+                "model_ms": first_trace.latency_ms + review_trace.latency_ms,
                 "usage": first_trace.usage,
                 "usage_partial": True,
                 "contract_violations": self._violations(first, snapshot),
@@ -403,6 +451,7 @@ class EvaluationService:
                 },
             }
         budget.charge()
+        merged_usage, usage_partial = merge_usage(first_trace.usage, review_trace.usage)
 
         if review.verdict == "agree":
             root_cause = first.root_cause
@@ -421,8 +470,8 @@ class EvaluationService:
             "confidence": first.confidence,
             "model_calls": budget.calls,
             "model_ms": first_trace.latency_ms + review_trace.latency_ms,
-            "usage": merge_usage(first_trace.usage, review_trace.usage),
-            "usage_partial": bool(first_trace.usage) != bool(review_trace.usage),
+            "usage": merged_usage,
+            "usage_partial": usage_partial,
             "contract_violations": [
                 *self._violations(first, snapshot),
                 *self._violations(review, snapshot),

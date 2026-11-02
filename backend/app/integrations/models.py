@@ -203,7 +203,8 @@ class HolmesDiagnosisProvider:
         因此拿不到真值，也拿不到任何指向性字段。
         """
         headers = self.request_headers()
-        self.check_capabilities(headers)
+        if verify_capabilities:
+            self.check_capabilities(headers)
         evidence = [Evidence.model_validate(item) for item in context.get("evidence", [])]
         required = (
             list(required_ids) if required_ids is not None else required_evidence_ids(evidence)

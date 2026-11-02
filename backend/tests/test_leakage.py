@@ -12,7 +12,7 @@ import pytest
 from app.agents.evidence import EvidenceAgent
 from app.config import Settings
 from app.integrations.models import HolmesDiagnosisProvider
-from app.schemas.domain import Diagnosis
+from app.schemas.domain import Diagnosis, DomainReview
 
 # 场景标识：泄漏即等于告诉模型「这次注入的是哪个场景」。
 SCENARIO_MARKERS = ["MYSQL_DOWN", "REDIS_DOWN", "NGINX_502"]
@@ -68,7 +68,12 @@ def checkable_text(payload: dict) -> str:
     这是 §1.5 明确声明的「假设空间被收窄」限制，不是泄漏；
     除它之外，载荷的任何位置都不得出现场景标识或答案标签。
     """
-    schema_blob = json.dumps(Diagnosis.model_json_schema(), ensure_ascii=False)
+    # 声明过的答案空间：诊断契约与复核契约的 root_cause 枚举。
+    # json_object 模式下契约会被拼进提示词，因此字符串也要剔除。
+    blobs = [
+        json.dumps(Diagnosis.model_json_schema(), ensure_ascii=False),
+        json.dumps(DomainReview.model_json_schema(), ensure_ascii=False),
+    ]
     parts = []
     for key, value in payload.items():
         if key == "response_format":
@@ -78,7 +83,10 @@ def checkable_text(payload: dict) -> str:
                 spec["json_schema"] = {k: v for k, v in declared.items() if k != "schema"}
             parts.append(json.dumps(spec, ensure_ascii=False))
         elif isinstance(value, str):
-            parts.append(value.replace(schema_blob, ""))
+            text = value
+            for blob in blobs:
+                text = text.replace(blob, "")
+            parts.append(text)
         else:
             parts.append(json.dumps(value, ensure_ascii=False))
     return "\n".join(parts)
@@ -145,12 +153,14 @@ def test_blind_payload_has_no_scenario_markers(tmp_path, world, mode):
         assert label not in text, f"盲诊载荷泄漏了答案标签 {label}"
 
 
-def test_review_payload_has_no_scenario_markers(tmp_path, world):
+@pytest.mark.parametrize("mode", ["json_schema", "json_object"])
+def test_review_payload_has_no_scenario_markers(tmp_path, world, mode):
     """B 臂的复核入口同样是盲诊路径：最终载荷里不能有场景标识。
 
-    §4.3 要求对盲诊路径的最终序列化载荷断言，两个入口都要覆盖。
+    §4.3 要求对盲诊路径的最终序列化载荷断言，两个入口都要覆盖；
+    两种 JSON 模式都要覆盖（json_object 会把契约拼进提示词）。
     """
-    settings = blind_settings(tmp_path, "json_schema")
+    settings = blind_settings(tmp_path, mode)
     evidence = EvidenceAgent(settings, world, world).collect_domain()
     ids = [item.id for item in evidence]
     recorder = Recorder(
