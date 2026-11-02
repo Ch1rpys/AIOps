@@ -421,6 +421,36 @@ async function run() {
       await page.getByText("暂无符合条件的工单。", { exact: false }).waitFor();
     },
   );
+  await check(
+    "TEST/MOCK evaluation page: arms comparison, hidden truth and honest metrics",
+    async () => {
+      await page.goto(`${base}/evaluation`);
+      await page.getByRole("heading", { name: "盲诊评测" }).waitFor();
+      await inputToken(page);
+      await page.getByRole("button", { name: "触发实验" }).click();
+      await page.getByText("实验已触发", { exact: false }).waitFor();
+      await page.getByText("A · 单次诊断", { exact: false }).first().waitFor();
+      await page.getByText("B · 多 Agent 复核", { exact: false }).first().waitFor();
+      const cards = await page.locator(".proto-card").allInnerTexts();
+      const comparison = cards.find((text) => text.includes("各臂对照"));
+      assert.ok(comparison, "comparison card must exist");
+      // 纯诊断对照不评估处置提议与拦截率：必须显示「不适用」，不能显示 0。
+      assert.ok(comparison.includes("不适用"), "proposal metrics must be not applicable");
+      assert.ok(comparison.includes("统计显著性"), "honesty note must be shown");
+      // 默认不显示真值列。
+      const records = cards.find((text) => text.includes("实验记录"));
+      assert.ok(records, "records card must exist");
+      assert.ok(!records.includes("MYSQL_DOWN"), "truth must not be exposed by default");
+      // 切到评测视图后才显示真值。
+      await page.getByText("评测视图（显示真值与判卷结果）").click();
+      await page.getByText("真值：", { exact: false }).first().waitFor();
+      await page.screenshot({
+        path: path.join(output, "console-evaluation-mock-1440.png"),
+        fullPage: true,
+      });
+      await noOverflow(page);
+    },
+  );
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(transportErrors, []);
   results.push({ name: "No browser runtime errors", result: "PASS" });
