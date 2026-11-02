@@ -67,6 +67,7 @@ class TestWorld:
         # 停止操作不生效：用来模拟「注入了但故障没出现」。
         self.stop_has_no_effect = False
         self.vision_observation = VisionObservation()
+        self.vision_error = None
 
     @property
     def stopped(self) -> bool:
@@ -181,6 +182,8 @@ class TestWorld:
     def diagnose_domain(
         self, context, required_ids=None, timeout=None, trace=None, verify_capabilities=True
     ):
+        if verify_capabilities:
+            self.capability_checks += 1
         self.blind_contexts.append(context)
         if self.blind_error:
             raise self.blind_error
@@ -200,6 +203,8 @@ class TestWorld:
     def review_domain(
         self, context, required_ids=None, timeout=None, trace=None, verify_capabilities=True
     ):
+        if verify_capabilities:
+            self.capability_checks += 1
         self.blind_contexts.append(context)
         if self.blind_review_error:
             raise self.blind_review_error
@@ -219,6 +224,8 @@ class TestWorld:
         return review
 
     def analyze(self, image_base64, mime, note=""):
+        if self.vision_error:
+            raise self.vision_error
         return self.vision_observation
 
     def configured(self):

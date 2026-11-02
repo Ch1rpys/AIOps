@@ -265,8 +265,12 @@ def test_failed_experiment_is_recorded_not_dropped(client, world):
 
 
 def test_capability_check_runs_once_per_experiment(client, world):
-    """一次实验只核验一次版本与工具权限：否则单臂最坏耗时突破 45 秒预算。"""
-    trigger(client)
+    """一次实验只核验一次版本与工具权限：否则单臂最坏耗时突破 45 秒预算。
+
+    替身会统计「调用内部」的核验，所以这个断言对真实 provider 同样成立。
+    """
+    trigger(client, arms=("A", "B"))
+    # 实验级核验 1 次 + A 臂 0 次 + B 臂 0 次。
     assert world.capability_checks == 1
 
 
@@ -288,4 +292,23 @@ def test_failed_run_does_not_report_zero_measurements(client, world):
     assert arm["timing"]["model_ms"] is None
     assert arm["timing"]["collect_ms"] is None
     assert arm["timing"]["experiment_total_ms"] is None
+    assert arm["token_usage_total"] is None
+
+
+def test_failed_model_call_keeps_its_real_cost(client, world):
+    """失败的模型调用也要算调用次数与真实耗时，不能报「0 次 0 毫秒」（§9.3）。"""
+    world.blind_error = DomainError("AI_UNAVAILABLE", "TEST/MOCK 模型不可用", 503)
+    trigger(client, arms=("A",))
+    rows = runs(client)
+    assert len(rows) == 1
+    detail = client.get(f"/api/evaluation/runs/{rows[0]['id']}").json()
+    assert detail["status"] == "ERROR"
+    # 调用确实发出去了：次数已知。
+    assert detail["model_calls"] == 1
+    # token 仍是未知。
+    assert detail["token_usage"] is None
+    summary = client.get("/api/evaluation/summary").json()
+    arm = next(item for item in summary["arms"] if item["arm"] == "A")
+    assert arm["model_calls_avg"] == 1
+    assert arm["model_calls_unknown"] == 0
     assert arm["token_usage_total"] is None

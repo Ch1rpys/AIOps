@@ -9,6 +9,7 @@
 import base64
 
 import pytest
+from app.config import DomainError
 from app.schemas.domain import VisionAnomaly, VisionObservation
 from conftest import injected
 
@@ -155,3 +156,16 @@ def test_evidence_attachment_field_is_optional():
     assert plain.attachment is None
     with pytest.raises(ValueError):
         Evidence(source="x", kind="probe", raw={}, attachment="not-a-dict")
+
+
+def test_failed_analysis_removes_the_orphan_file_and_keeps_the_error(client, world, settings):
+    """视觉模型失败：保留真实错误码，刚存的文件不留孤儿。"""
+    world.vision_error = DomainError("VISION_UNAVAILABLE", "TEST/MOCK 视觉模型不可用", 503)
+    incident_id = injected(client)
+    folder = settings.data_dir / "attachments"
+    before = len(list(folder.glob("*"))) if folder.exists() else 0
+    response = upload(client, incident_id)
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "VISION_UNAVAILABLE"
+    after = len(list(folder.glob("*"))) if folder.exists() else 0
+    assert after == before
