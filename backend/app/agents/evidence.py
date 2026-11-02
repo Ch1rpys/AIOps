@@ -86,7 +86,14 @@ class EvidenceAgent:
                 "uncertain": attachment.get("uncertain", []),
                 "note": note,
             },
-            attachment=attachment,
+            # 只带观测字段：存储路径、摘要这些后台细节不进模型上下文（§4.3）。
+            attachment={
+                "observed_at": attachment.get("observed_at"),
+                "observed_at_known": attachment.get("observed_at_known"),
+                "extracted_text": attachment.get("extracted_text", ""),
+                "anomalies": attachment.get("anomalies") or [],
+                "uncertain": attachment.get("uncertain") or [],
+            },
         )
 
     def collect_domain(self) -> list[Evidence]:

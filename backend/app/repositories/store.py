@@ -11,6 +11,7 @@ from sqlalchemy import (
     literal_column,
     select,
 )
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app.config import DomainError
@@ -296,7 +297,14 @@ class Store:
                 raise DomainError(
                     "LAB_BUSY", "工作台实验进行中，请先完成或重置当前实验后再评测", 409
                 )
-            session.add(EvaluationLease(id=1, holder=holder, acquired_at=now()))
+            try:
+                session.add(EvaluationLease(id=1, holder=holder, acquired_at=now()))
+                session.flush()
+            except IntegrityError as conflict:
+                # 并发抢租约：唯一键冲突说明别人已经拿到了。
+                raise DomainError(
+                    "EVALUATION_BUSY", "评测进行中，请等待当前评测结束", 409
+                ) from conflict
 
     def release_evaluation_lease(self, holder: str) -> None:
         with self.session() as session, session.begin():

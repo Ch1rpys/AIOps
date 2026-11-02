@@ -90,27 +90,37 @@ class AttachmentService:
         }
 
     def save_metadata(self, attachment: dict) -> None:
-        """把附件元信息（含识图结果）落盘，评测的后台任务才能读到。"""
+        """把附件元信息（含识图结果）落盘，评测的后台任务才能读到。
+
+        先写临时文件再改名：后台任务随时可能在写入中途读，
+        半截 JSON 不能当成「没有这条记录」。
+        """
         digest = attachment.get("sha256")
         if not digest:
             return
         self.folder.mkdir(parents=True, exist_ok=True)
-        (self.folder / f"{digest}.json").write_text(
-            json.dumps(attachment, ensure_ascii=False), encoding="utf-8"
-        )
+        target = self.folder / f"{digest}.json"
+        temporary = self.folder / f".{digest}.json.tmp"
+        temporary.write_text(json.dumps(attachment, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(target)
 
     def load(self, attachment_id: str) -> dict | None:
         """按附件 id 读回元信息；不存在或 id 不合法时返回 None。"""
         digest = str(attachment_id).removeprefix("att_")
-        if not digest or "/" in digest or "\\" in digest or ".." in digest:
+        # id 只能是内容摘要：任何路径成分都不接受。
+        if not digest or len(digest) != 64:
+            return None
+        if any(char not in "0123456789abcdef" for char in digest):
             return None
         path = self.folder / f"{digest}.json"
         if not path.exists():
             return None
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            parsed = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
+        # 形状不对就当没有：不能让脏数据把调用方带崩。
+        return parsed if isinstance(parsed, dict) else None
 
     def discard(self, attachment: dict) -> None:
         """删除没有被任何工单引用的附件文件（分析失败时的孤儿文件）。"""

@@ -198,7 +198,9 @@ class EvaluationService:
             stopped = True
             container_ms = round((time.monotonic() - container_started) * 1000)
             snapshot, extra_collects, collect_ms = self._capture_snapshot(scenario)
-            snapshot = snapshot + self._visual_evidence(attachment_ids or [])
+            # 视觉证据只进 C 臂：A/B 是「纯文本证据」（§4.5），
+            # 文本快照三臂共用同一个 snapshot_hash。
+            visual = self._visual_evidence(attachment_ids or [])
         finally:
             # 无论实验成功还是中途失败，都要把实验环境恢复健康，
             # 不能把停掉的容器留在那里让工作台无法使用。
@@ -232,6 +234,7 @@ class EvaluationService:
                         "restore_ms": restore_ms,
                         "lab_restored": restored,
                     },
+                    visual,
                 )
             )
         return {"snapshot_hash": fingerprint, "runs": rows}
@@ -276,10 +279,10 @@ class EvaluationService:
             items.append(
                 Evidence(
                     id=f"evidence_{attachment_id}",
-                    source=f"attachment:{attachment.get('filename', attachment_id)}",
+                    # 来源只用不透明 id：文件名是用户可控文本，不能进模型上下文（§4.3）。
+                    source=f"attachment:{attachment_id}",
                     kind="attachment",
                     raw={
-                        "filename": attachment.get("filename"),
                         "observed_at": attachment.get("observed_at"),
                         "observed_at_known": attachment.get("observed_at_known"),
                         "extracted_text": attachment.get("extracted_text", ""),
@@ -323,12 +326,16 @@ class EvaluationService:
         fingerprint: str,
         extra_collects: int,
         timings: dict,
+        visual: list[Evidence] | None = None,
     ) -> dict:
         budget = Budget(
             self.settings.evaluation_budget_seconds, self.settings.evaluation_max_model_calls
         )
         timeout = self.settings.evaluation_model_timeout
-        payload = {"evidence": [item.model_dump(mode="json") for item in snapshot]}
+        visual = list(visual or [])
+        # A/B 是纯文本证据；C 臂在同一份文本快照上再加视觉证据（§4.5）。
+        arm_evidence = snapshot + (visual if arm == "C" else [])
+        payload = {"evidence": [item.model_dump(mode="json") for item in arm_evidence]}
         required = required_evidence_ids(snapshot)
         record: dict = {"extra_collects": extra_collects}
         try:
@@ -377,7 +384,10 @@ class EvaluationService:
         }
         record["approval_applicable"] = False
         record["lab_restored"] = timings["lab_restored"]
-        return self._persist(arm, scenario, snapshot, fingerprint, record)
+        if visual and arm == "C":
+            # 记下这一臂比文本快照多了什么，便于复查。
+            record["visual_evidence_ids"] = [item.id for item in visual]
+        return self._persist(arm, scenario, arm_evidence, fingerprint, record)
 
     def _arm_a(
         self,

@@ -5,6 +5,7 @@
 """
 
 import base64
+import json
 
 import pytest
 from app.config import DomainError
@@ -401,7 +402,6 @@ def test_c_arm_payload_carries_only_the_observation(client, world):
     detail = client.get(f"/api/evaluation/runs/{rows[0]['id']}").json()
     attachment = next(item for item in detail["evidence"]["items"] if item["kind"] == "attachment")
     assert set(attachment["raw"]) == {
-        "filename",
         "observed_at",
         "observed_at_known",
         "extracted_text",
@@ -411,6 +411,9 @@ def test_c_arm_payload_carries_only_the_observation(client, world):
     }
     assert "storage" not in attachment["raw"]
     assert "sha256" not in attachment["raw"]
+    # 文件名是用户可控文本，不能进模型上下文（§4.3）。
+    assert "filename" not in attachment["raw"]
+    assert "filename" not in attachment["source"]
     # 截图里识别到的异常确实进了快照。
     assert attachment["raw"]["anomalies"][0]["description"] == "数据库错误页"
 
@@ -421,3 +424,65 @@ def test_service_also_refuses_c_arm_without_visual_evidence(client, world):
     with pytest.raises(DomainError) as failure:
         service.run_experiment(Scenario.MYSQL_DOWN, ["C"], [])
     assert failure.value.code == "EVALUATION_ATTACHMENT_REQUIRED"
+
+
+def test_only_c_arm_receives_the_visual_evidence(client, world):
+    """A/B 是纯文本证据，视觉证据只进 C 臂（§4.5）。
+
+    三臂共用同一份文本快照（snapshot_hash 相同），
+    但只有 C 臂的输入里多出视觉证据 —— 否则 A/B/C 是三个相同输入的假对照。
+    """
+    world.vision_observation = VisionObservation(
+        observed_at="2026-11-02T10:00:00",
+        extracted_text="503 Service Unavailable",
+        anomalies=[VisionAnomaly(description="数据库错误页", region=[], text="503")],
+    )
+    upload = client.post(
+        "/api/evaluation/attachments",
+        json={
+            "filename": "error-page.png",
+            "content_base64": base64.b64encode(PNG_BYTES).decode("ascii"),
+            "note": "故障时刻的截图",
+        },
+    )
+    attachment_id = upload.json()["id"]
+    trigger(client, arms=("A", "B", "C"), key="TEST-eval-abc", attachment_ids=[attachment_id])
+    rows = runs(client, limit=10)
+    assert len(rows) == 3
+    # 三臂复用同一 snapshot_hash（公平性约束写进代码）。
+    assert len({row["snapshot_hash"] for row in rows}) == 1
+    for row in rows:
+        detail = client.get(f"/api/evaluation/runs/{row['id']}").json()
+        kinds = {item["kind"] for item in detail["evidence"]["items"]}
+        if row["arm"] == "C":
+            assert "attachment" in kinds
+        else:
+            # A/B 是纯文本证据：模型看不到截图。
+            assert "attachment" not in kinds
+
+
+def test_attachment_filename_never_reaches_the_model_payload(client, world):
+    """文件名是用户可控文本：起成答案标签的名字也不能进模型上下文（§4.3）。"""
+    world.vision_observation = VisionObservation(
+        observed_at="2026-11-02T10:00:00",
+        extracted_text="503",
+        anomalies=[],
+    )
+    upload = client.post(
+        "/api/evaluation/attachments",
+        json={
+            "filename": "MYSQL_SERVICE_STOPPED.png",
+            "content_base64": base64.b64encode(PNG_BYTES).decode("ascii"),
+            "note": "",
+        },
+    )
+    attachment_id = upload.json()["id"]
+    trigger(client, arms=("C",), key="TEST-eval-c-filename", attachment_ids=[attachment_id])
+    # 复核上下文里有第一次诊断自己的结论（模型自己的输出，不是泄漏），
+    # 因此只检查诊断上下文里的证据部分。
+    for context in world.blind_contexts:
+        if "previous_diagnosis" in context:
+            continue
+        blob = json.dumps(context.get("evidence", []), ensure_ascii=False)
+        assert "MYSQL_SERVICE_STOPPED.png" not in blob
+        assert "MYSQL_SERVICE_STOPPED" not in blob
