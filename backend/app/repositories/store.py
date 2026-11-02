@@ -116,19 +116,18 @@ class Store:
             connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("PRAGMA busy_timeout=5000")
 
-        # 仅创建缺失表；schema v1 的增量迁移须新增版本，禁止清库升级。
+        # schema 版本只升不降；旧库走显式迁移，禁止清库升级。
         with self.engine.begin() as connection:
             version = connection.exec_driver_sql("PRAGMA user_version").scalar_one()
             if version not in SUPPORTED_SCHEMA_VERSIONS:
                 raise DomainError("SCHEMA_VERSION_MISMATCH", "业务数据库版本不兼容", 503)
-        Base.metadata.create_all(self.engine)
-        with self.engine.begin() as connection:
-            version = connection.exec_driver_sql("PRAGMA user_version").scalar_one()
             if version == 0:
-                # 全新库：先落 v1 形状，再走迁移分支，版本号始终与实际 schema 一致。
+                # 全新库：建全部表，先落 v1 形状，再走迁移分支，版本号与实际 schema 一致。
+                Base.metadata.create_all(self.engine)
                 connection.exec_driver_sql("PRAGMA user_version=1")
                 version = 1
             if version == 1:
+                # v1 → v2 的增量内容由迁移分支负责，不靠 create_all 顺带建出来。
                 self.migrate_1_to_2(connection)
                 connection.exec_driver_sql(f"PRAGMA user_version={SCHEMA_VERSION}")
 
