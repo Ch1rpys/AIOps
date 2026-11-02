@@ -119,6 +119,14 @@ def test_oversized_attachment_is_rejected(client, world):
     assert upload(client, incident_id, content=PNG + b"x" * 4096).status_code == 413
 
 
+def test_filename_cannot_smuggle_control_characters(client, world):
+    """文件名会出现在证据与日志里，控制字符必须被清掉。"""
+    incident_id = injected(client)
+    attachment = upload(client, incident_id, filename="shot\nFAKE-LOG-LINE.png").json()
+    assert "\n" not in attachment["filename"]
+    assert "FAKE-LOG-LINE" in attachment["filename"]
+
+
 def test_health_reports_vision_as_unknown_when_not_configured(client):
     result = client.get("/api/health").json()
     assert result["vision"]["status"] == "UNKNOWN"

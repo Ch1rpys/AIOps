@@ -21,6 +21,13 @@ from app.schemas.domain import Probe, now
 ALLOWED_MIME = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
 
 
+def safe_filename(name: str) -> str:
+    """只保留可打印字符：文件名会出现在证据与日志里，不能带控制字符伪造行。"""
+    cleaned = "".join(char for char in name if char.isprintable()).strip()
+    cleaned = cleaned.replace("/", "-").replace("\\", "-")
+    return cleaned[:120] or "screenshot"
+
+
 def sniff_mime(content: bytes) -> str:
     """按魔数判定图片格式，不信任文件名与客户端声明的类型。"""
     if content.startswith(b"\x89PNG\r\n\x1a\n"):
@@ -63,7 +70,7 @@ class AttachmentService:
             path.write_bytes(content)
         return {
             "id": f"att_{digest[:16]}",
-            "filename": filename[:120],
+            "filename": safe_filename(filename),
             "mime": mime,
             "sha256": digest,
             "size": len(content),
