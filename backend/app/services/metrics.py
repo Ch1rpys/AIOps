@@ -9,8 +9,7 @@
 from sqlalchemy import select
 
 from app.repositories.store import Incident, Record, Store
-from app.scenarios import SCENARIOS
-from app.schemas.domain import Scenario, Status
+from app.schemas.domain import Scenario
 from app.services.executor import plan_violations
 
 
@@ -73,21 +72,3 @@ def end_to_end_summary(store: Store) -> dict:
         "model_calls_unknown": 0,
         "note": "端到端指标只统计闭环路径真实产生的处置提议；纯诊断对照不适用。",
     }
-
-
-def scenario_coverage(store: Store) -> list[dict]:
-    """各场景的闭环覆盖情况，便于复盘时核对样本是否够。"""
-    with store.session() as session:
-        incidents = session.scalars(select(Incident)).all()
-    coverage = []
-    for key, definition in SCENARIOS.items():
-        rows = [item for item in incidents if item.scenario_key == key]
-        coverage.append(
-            {
-                "scenario": key,
-                "name": definition.name,
-                "incidents": len(rows),
-                "resolved": sum(1 for item in rows if item.status == Status.RESOLVED),
-            }
-        )
-    return coverage
