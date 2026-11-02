@@ -329,3 +329,14 @@ def test_retry_diagnoses_running_container_without_blind_second_start(client, wo
     assert item["status"] == "UNKNOWN"
     assert item["detail"]["error"]["code"] == "EVIDENCE_INSUFFICIENT"
     assert world.operations.count(("demo-mysql", "start")) == 1
+
+
+def test_raw_model_output_is_persisted_for_audit(client, world):
+    """M0 §3.2：每轮要留下模型原始输出，审计要的是模型真的说了什么。"""
+    incident_id = injected(client)
+    client.post(f"/api/incidents/{incident_id}/diagnose")
+    item = detail(client, incident_id)
+    raw = item["detail"]["raw_model_output"]
+    assert raw
+    assert "MYSQL_SERVICE_STOPPED" in raw
+    assert item["detail"]["model_usage"] is not None

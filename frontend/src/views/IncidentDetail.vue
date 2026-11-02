@@ -673,6 +673,52 @@ onUnmounted(() => {
             <table class="probe-table">
               <thead>
                 <tr>
+                  <th>服务</th>
+                  <th>状态</th>
+                  <th>探针</th>
+                  <th>诊断依据</th>
+                  <th>日志尾部</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="node in impact.nodes" :key="node.id">
+                  <td>
+                    <strong class="mono">{{ node.id }}</strong>
+                    <div class="muted text-12">{{ node.role }}</div>
+                  </td>
+                  <td>
+                    <span
+                      class="state-badge"
+                      :data-tone="node.observed_anomaly ? 'danger' : 'success'"
+                    >
+                      {{ node.state }}
+                    </span>
+                    <span v-if="node.is_root_cause" class="state-badge" data-tone="warning">
+                      根因
+                    </span>
+                  </td>
+                  <td class="text-12">
+                    <span v-for="probe in node.probes" :key="probe.name" class="mono">
+                      {{ probe.name }}={{ probe.verdict }}
+                    </span>
+                    <span v-if="!node.probes.length" class="muted">—</span>
+                  </td>
+                  <td class="text-12">{{ node.diagnosis_evidence_ids?.length ?? 0 }} 条</td>
+                  <td class="muted text-12">
+                    <span v-for="(line, index) in node.logs ?? []" :key="index">
+                      {{ line.slice(0, 80) }}
+                    </span>
+                    <span v-if="!(node.logs ?? []).length">—</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="table-scroll" style="margin-top: 12px">
+            <table class="probe-table">
+              <thead>
+                <tr>
                   <th>关系</th>
                   <th>类型</th>
                   <th>说明</th>

@@ -46,7 +46,7 @@ class ScenarioWorld(TestWorld):
     def baseline(self):
         return [p for scenario in Scenario for p in self.for_scenario(scenario)]
 
-    def diagnose(self, context):
+    def diagnose(self, context, trace=None):
         self.diagnosis_contexts.append(context)
         definition = SCENARIOS[Scenario(context["scenario_key"])]
         return Diagnosis(
@@ -337,7 +337,7 @@ def test_semantically_rejected_diagnosis_remains_auditable(settings):
     world = ScenarioWorld()
     original = world.diagnose
 
-    def uncertain(context):
+    def uncertain(context, trace=None):
         result = original(context)
         result.evidence_sufficient = False
         result.summary = "TEST/MOCK evidence insufficient"

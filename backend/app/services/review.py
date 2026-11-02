@@ -41,6 +41,20 @@ def collected_probes(item: dict) -> list[dict]:
     ]
 
 
+def service_of_evidence(topology, payload: dict) -> str | None:
+    """判断一条证据属于哪个服务：探针按注册表归属，日志按服务名归属。"""
+    kind = payload.get("kind")
+    if kind == "logs":
+        source = str(payload.get("source", ""))
+        return source if source in topology.services else None
+    if kind == "probe":
+        name = (payload.get("raw") or {}).get("name")
+        for service_id in topology.services:
+            if name in topology.probes_of(service_id):
+                return service_id
+    return None
+
+
 def incident_impact_graph(item: dict) -> dict:
     """从工单已保存的证据生成影响图。"""
     topology = load_topology()
@@ -51,6 +65,23 @@ def incident_impact_graph(item: dict) -> dict:
         collected_probes(item),
         diagnosis.get("root_cause"),
     )
+    # §7.1：影响图要叠加探针、日志与诊断依据，而不只是节点与边。
+    cited = set(diagnosis.get("evidence_ids") or [])
+    logs: dict[str, list[str]] = {}
+    citations: dict[str, list[str]] = {}
+    for payload in evidence_payloads(item):
+        service_id = service_of_evidence(topology, payload)
+        if service_id is None:
+            continue
+        if payload.get("kind") == "logs":
+            text = str((payload.get("raw") or {}).get("text", ""))
+            tail = [line.strip() for line in text.splitlines() if line.strip()][-2:]
+            logs.setdefault(service_id, []).extend(tail[-2:])
+        if payload.get("id") in cited:
+            citations.setdefault(service_id, []).append(str(payload.get("id")))
+    for node in graph["nodes"]:
+        node["diagnosis_evidence_ids"] = citations.get(node["id"], [])
+        node["logs"] = logs.get(node["id"], [])[-2:]
     root_cause_service = ROOT_CAUSE_SERVICE.get(diagnosis.get("root_cause") or "")
     for node in graph["nodes"]:
         node["is_root_cause"] = bool(root_cause_service) and node["id"] == root_cause_service

@@ -116,3 +116,20 @@ def test_review_keeps_unresolved_items(client, world):
 
 def test_review_of_missing_incident_is_404(client):
     assert client.get("/api/incidents/inc_missing/impact").status_code == 404
+
+
+def test_impact_graph_overlays_probes_logs_and_diagnosis_citations(client, world):
+    """§7.1：影响图要叠加探针、日志与诊断依据，不只是节点与边。"""
+    incident_id, plan_id = waiting(client)
+    approve(client, incident_id, plan_id)
+    graph = client.get(f"/api/incidents/{incident_id}/impact").json()
+    mysql = next(node for node in graph["nodes"] if node["id"] == "demo-mysql")
+    # 探针叠加
+    assert {probe["name"] for probe in mysql["probes"]} >= {"mysql_select_1"}
+    # 日志尾部叠加
+    assert mysql["logs"]
+    assert any("connection refused" in line for line in mysql["logs"])
+    # 诊断依据叠加：引用了容器状态与探针证据
+    assert mysql["diagnosis_evidence_ids"]
+    diagnosis = client.get(f"/api/incidents/{incident_id}").json()["detail"]["diagnosis"]
+    assert set(mysql["diagnosis_evidence_ids"]) <= set(diagnosis["evidence_ids"])

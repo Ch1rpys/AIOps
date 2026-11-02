@@ -31,7 +31,7 @@ class ModelTrace:
 
 
 class DiagnosisProvider(Protocol):
-    def diagnose(self, context: dict) -> Diagnosis: ...
+    def diagnose(self, context: dict, trace: ModelTrace | None = None) -> Diagnosis: ...
 
 
 class PlannerProvider(Protocol):
@@ -79,7 +79,7 @@ class HolmesDiagnosisProvider:
         self.settings = settings
         self.client = client
 
-    def diagnose(self, context: dict) -> Diagnosis:
+    def diagnose(self, context: dict, trace: ModelTrace | None = None) -> Diagnosis:
         headers = {}
         if self.settings.holmes_api_key.get_secret_value():
             headers["X-API-Key"] = self.settings.holmes_api_key.get_secret_value()
@@ -114,6 +114,9 @@ class HolmesDiagnosisProvider:
             headers,
             self.settings.model_timeout,
         )
+        if trace is not None:
+            trace.raw = body
+            trace.usage = extract_usage(body)
         try:
             # 官方 API 的 analysis 可为 JSON 字符串，必须二次解码再做契约校验。
             raw = body["analysis"]
@@ -121,8 +124,12 @@ class HolmesDiagnosisProvider:
                 raw = json.loads(raw)
             return Diagnosis.model_validate(raw)
         except (KeyError, ValueError, TypeError, ValidationError) as error:
+            # 模型原始输出要留痕：否则解析失败时无从判断模型到底说了什么。
             raise DomainError(
-                "AI_INVALID_RESPONSE", "HolmesGPT analysis 不符合诊断契约", 502
+                "AI_INVALID_RESPONSE",
+                "HolmesGPT analysis 不符合诊断契约",
+                502,
+                {"raw_output": str(body.get("analysis", ""))[:4000]},
             ) from error
 
     def diagnose_domain(
@@ -213,7 +220,10 @@ class HolmesDiagnosisProvider:
             return DomainReview.model_validate(raw)
         except (KeyError, ValueError, TypeError, ValidationError) as error:
             raise DomainError(
-                "AI_INVALID_RESPONSE", "HolmesGPT analysis 不符合复核契约", 502
+                "AI_INVALID_RESPONSE",
+                "HolmesGPT analysis 不符合复核契约",
+                502,
+                {"raw_output": str(body.get("analysis", ""))[:4000]},
             ) from error
 
     def request_headers(self) -> dict:

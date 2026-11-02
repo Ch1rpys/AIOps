@@ -168,6 +168,9 @@ export interface ImpactNode {
   is_root_cause?: boolean;
   probes: Probe[];
   endpoints: string[];
+  /** §7.1：影响图叠加诊断依据与日志尾部。 */
+  diagnosis_evidence_ids?: string[];
+  logs?: string[];
 }
 export interface ImpactEdge {
   from: string;

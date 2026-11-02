@@ -155,6 +155,22 @@ def run(args) -> int:
                                 json.dumps(diagnosis, ensure_ascii=False, indent=2),
                                 encoding="utf-8",
                             )
+                            # 模型原始输出单独留痕：模型说了什么，而不是我们解析后的结论。
+                            raw_path = folder / f"{incident_id}.model-output.json"
+                            raw_path.write_text(
+                                json.dumps(
+                                    {
+                                        "raw_model_output": (item["detail"] or {}).get(
+                                            "raw_model_output"
+                                        ),
+                                        "model_usage": (item["detail"] or {}).get("model_usage"),
+                                        "diagnosis": diagnosis,
+                                    },
+                                    ensure_ascii=False,
+                                    indent=2,
+                                ),
+                                encoding="utf-8",
+                            )
                             entry = {
                                 "scenario": scenario,
                                 "round": index + 1,
@@ -163,6 +179,7 @@ def run(args) -> int:
                                 "diagnosis": diagnosis,
                                 "report_path": str(report_path),
                                 "diagnosis_path": str(diagnosis_path),
+                                "model_output_path": str(raw_path),
                             }
                             transcript["runs"].append(entry)
                             save()

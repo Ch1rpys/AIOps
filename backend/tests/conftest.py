@@ -140,14 +140,14 @@ class TestWorld:
             }
         return Verification(verdict=verdict, samples=[probes], window=window)
 
-    def diagnose(self, context):
+    def diagnose(self, context, trace=None):
         self.diagnosis_contexts.append(context)
         if self.diagnosis_error:
             raise self.diagnosis_error
         requests = []
         if self.requested_checks:
             requests = list(self.requested_checks.pop(0))
-        return Diagnosis(
+        diagnosis = Diagnosis(
             root_cause="MYSQL_SERVICE_STOPPED",
             summary="TEST/MOCK 数据库已停止",
             evidence_ids=[e["id"] for e in context["evidence"]],
@@ -156,6 +156,10 @@ class TestWorld:
             candidates=list(self.candidates),
             requested_checks=requests,
         )
+        if trace is not None:
+            trace.raw = {"analysis": diagnosis.model_dump_json()}
+            trace.usage = {"total_tokens": 0}
+        return diagnosis
 
     def plan(self, context):
         return Plan(

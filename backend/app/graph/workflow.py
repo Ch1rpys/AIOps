@@ -16,7 +16,7 @@ from app.agents.evidence import (
     validate_execution_preconditions,
 )
 from app.config import CHECK_IDS, DomainError, Settings
-from app.integrations.models import DiagnosisProvider, PlannerProvider
+from app.integrations.models import DiagnosisProvider, ModelTrace, PlannerProvider
 from app.integrations.probes import Probes
 from app.repositories.store import Store
 from app.schemas.domain import Evidence, Plan, Scenario, Status, Verdict, new_id, now
@@ -203,6 +203,7 @@ class Workflow:
             conflict = self.attachment_conflict(state)
             if conflict:
                 raise DomainError("EVIDENCE_CONFLICT", conflict)
+            trace = ModelTrace()
             result = self.diagnosis.diagnose(
                 {
                     "incident_id": state["incident_id"],
@@ -211,10 +212,18 @@ class Workflow:
                     "evidence": state["evidence"],
                     "previous_verification": state.get("verification"),
                     "previous_execution": state.get("execution"),
-                }
+                },
+                trace=trace,
             )
             # 语义校验拦截前保存模型结论，UNKNOWN 也必须能回溯其依据与疑点。
-            self.phase(state, Status.DIAGNOSING, diagnosis=result.model_dump(mode="json"))
+            self.phase(
+                state,
+                Status.DIAGNOSING,
+                diagnosis=result.model_dump(mode="json"),
+                # 模型原始输出单独留痕：审计要的是模型真的说了什么，不是我们解析后的结论。
+                raw_model_output=trace.raw.get("analysis"),
+                model_usage=trace.usage,
+            )
             # 闭环入口同时要求引用完整性与执行许可；盲诊路径只查完整性，另走独立入口。
             collected = [Evidence.model_validate(e) for e in state["evidence"]]
             validate_evidence_integrity(result, collected)
