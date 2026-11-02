@@ -113,6 +113,14 @@ class EvaluationService:
     ) -> dict:
         """一次盲诊实验：注入 → 固化快照 → 各臂在同一快照上对照。"""
         holder = new_id("eval")
+        if "C" in arms and not attachment_ids:
+            # C 臂没有视觉证据就等于 B 臂：那是假对照，服务层也要拦住，
+            # 不能只靠 API 层校验（脚本与后台任务同样会走到这里）。
+            raise DomainError(
+                "EVALUATION_ATTACHMENT_REQUIRED",
+                "C 臂需要视觉证据：请先上传截图并带上 attachment_ids",
+                409,
+            )
         with self.lock:
             self.store.acquire_evaluation_lease(holder)
             try:

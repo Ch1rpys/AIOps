@@ -10,6 +10,7 @@ import pytest
 from app.config import DomainError
 from app.repositories.store import EvaluationRun
 from app.schemas.domain import (
+    Scenario,
     VisionAnomaly,
     VisionObservation,
     now,
@@ -412,3 +413,11 @@ def test_c_arm_payload_carries_only_the_observation(client, world):
     assert "sha256" not in attachment["raw"]
     # 截图里识别到的异常确实进了快照。
     assert attachment["raw"]["anomalies"][0]["description"] == "数据库错误页"
+
+
+def test_service_also_refuses_c_arm_without_visual_evidence(client, world):
+    """服务层也要拦住「C 臂没有视觉证据」：不能只靠 API 层校验。"""
+    service = client.app.state.evaluation
+    with pytest.raises(DomainError) as failure:
+        service.run_experiment(Scenario.MYSQL_DOWN, ["C"], [])
+    assert failure.value.code == "EVALUATION_ATTACHMENT_REQUIRED"
