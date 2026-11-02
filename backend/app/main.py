@@ -19,7 +19,9 @@ from app.graph.workflow import Workflow
 from app.integrations.docker import DockerController
 from app.integrations.models import HolmesDiagnosisProvider, LLMPlanner
 from app.integrations.probes import Probes
+from app.integrations.vision import DashScopeVisionProvider
 from app.repositories.store import Store
+from app.services.attachments import AttachmentService
 from app.services.evaluation import EvaluationService
 from app.services.executor import ActionExecutor
 from app.services.platform import Platform
@@ -70,7 +72,18 @@ def create_app(settings: Settings | None = None, factory=None) -> FastAPI:
                     saver,
                     settings,
                 )
-                service = Platform(settings, store, docker, probes, evidence, workflow, client)
+                service = Platform(
+                    settings,
+                    store,
+                    docker,
+                    probes,
+                    evidence,
+                    workflow,
+                    client,
+                    attachments=AttachmentService(
+                        settings, DashScopeVisionProvider(settings, client)
+                    ),
+                )
                 evaluation_service = EvaluationService(
                     settings, store, docker, probes, evidence, provider
                 )

@@ -10,6 +10,7 @@ from app.config import DomainError
 from app.scenarios import SCENARIOS
 from app.schemas.domain import (
     ApprovalRequest,
+    AttachmentRequest,
     Confirmation,
     EvaluationRequest,
     IncidentView,
@@ -144,6 +145,27 @@ def verification(incident_id: str, service=Depends(platform)):
 @router.get("/incidents/{incident_id}/report")
 def report(incident_id: str, service=Depends(platform)):
     return service.store.view(incident_id)
+
+
+@router.post("/incidents/{incident_id}/attachments", dependencies=admin, status_code=201)
+def add_attachment(
+    incident_id: str,
+    body: AttachmentRequest,
+    service=Depends(platform),
+):
+    """上传一张真实错误页面或运维截图，并提取其中的观测。"""
+    attachment = service.attachments.store(body.filename, body.content_base64)
+    attachment = service.attachments.analyze(attachment, body.note)
+    with service.store.session() as session, session.begin():
+        item = service.store.require(session, incident_id)
+        service.store.append_attachment(session, item, attachment)
+        service.store.audit(session, incident_id, "attachment", attachment)
+    return attachment
+
+
+@router.get("/incidents/{incident_id}/attachments")
+def list_attachments(incident_id: str, service=Depends(platform)):
+    return service.store.view(incident_id)["detail"].get("attachments", [])
 
 
 @router.get("/incidents/{incident_id}/impact")

@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     planner_model: str = ""
     holmes_json_mode: Literal["json_schema", "json_object"] = "json_schema"
     planner_json_mode: Literal["json_schema", "json_object"] = "json_schema"
+    # 视觉模型（通义千问多模态）：模型 ID 以账号实际可用的为准。
+    # 空值不伪装成已配置：健康检查会显示 UNKNOWN。
+    vision_url: str = ""
+    vision_api_key: SecretStr = SecretStr("")
+    vision_model: str = ""
+    attachment_max_bytes: int = Field(default=5 * 1024 * 1024, ge=1024, le=20 * 1024 * 1024)
     mysql_host: Literal["127.0.0.1"] = "127.0.0.1"
     mysql_port: int = Field(default=13306, ge=1024, le=65535)
     mysql_user: Literal["demo"] = "demo"

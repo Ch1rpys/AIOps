@@ -138,6 +138,25 @@ export interface Incident extends IncidentSummary {
   };
 }
 
+// ---- 视觉附件 ---------------------------------------------------------------
+
+export interface Attachment {
+  id: string;
+  filename: string;
+  mime: string;
+  sha256: string;
+  size: number;
+  source: string;
+  uploaded_at: string;
+  storage: string;
+  observed_at: string | null;
+  observed_at_known: boolean;
+  extracted_text: string;
+  anomalies: { description: string; region: number[]; text: string }[];
+  uncertain: string[];
+  model: string;
+}
+
 // ---- 影响图与复盘摘要 -------------------------------------------------------
 
 export interface ImpactNode {

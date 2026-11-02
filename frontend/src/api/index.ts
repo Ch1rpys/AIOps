@@ -1,5 +1,6 @@
 import { adminToken } from '../composables/session';
 import type {
+  Attachment,
   EvaluationArm,
   ImpactGraph,
   IncidentReview,
@@ -83,6 +84,14 @@ export const api = {
       { plan_id: planId, decision, comment },
       `${planId}-${decision}`,
     ),
+  addAttachment: (id: string, filename: string, contentBase64: string, note = '') =>
+    request<Attachment>(`/incidents/${encodeURIComponent(id)}/attachments`, 'POST', {
+      filename,
+      content_base64: contentBase64,
+      note,
+    }),
+  incidentAttachments: (id: string) =>
+    request<Attachment[]>(`/incidents/${encodeURIComponent(id)}/attachments`),
   incidentImpact: (id: string) =>
     request<ImpactGraph>(`/incidents/${encodeURIComponent(id)}/impact`),
   incidentReview: (id: string) =>

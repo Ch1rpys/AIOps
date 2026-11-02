@@ -35,13 +35,24 @@ import EvidencePanel from '../components/EvidencePanel.vue';
 import WorkflowTrace from '../components/WorkflowTrace.vue';
 import VerificationPanel from '../components/VerificationPanel.vue';
 import DetailDrawer from '../components/DetailDrawer.vue';
-import type { AuditRecord, ImpactGraph, Incident, IncidentReview, Json, Probe } from '../types';
+import type {
+  Attachment,
+  AuditRecord,
+  ImpactGraph,
+  Incident,
+  IncidentReview,
+  Json,
+  Probe,
+} from '../types';
 
 const route = useRoute();
 const id = computed(() => String(route.params.id));
 const incident = ref<Incident | null>(null);
 const impact = ref<ImpactGraph | null>(null);
 const review = ref<IncidentReview | null>(null);
+const attachments = ref<Attachment[]>([]);
+const uploading = ref(false);
+const attachmentError = ref('');
 const { health, error: environmentError } = useEnvironment();
 
 const fetchError = ref('');
@@ -120,13 +131,15 @@ let version = 0;
 
 async function loadAnalysis(requestedId: string, requestedVersion: number) {
   try {
-    const [graph, summary] = await Promise.all([
+    const [graph, summary, files] = await Promise.all([
       api.incidentImpact(requestedId),
       api.incidentReview(requestedId),
+      api.incidentAttachments(requestedId),
     ]);
     if (requestedId !== id.value || requestedVersion !== version || disposed) return;
     impact.value = graph;
     review.value = summary;
+    attachments.value = files;
   } catch {
     // 影响图与复盘摘要缺失不影响主流程。
   }
@@ -201,6 +214,37 @@ async function copyId() {
   } catch {
     ElMessage.error('复制失败，请手动选取');
   }
+}
+
+// M2：上传真实错误页面或运维截图。图片只作为线索，不决定恢复。
+function onAttachmentSelected(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file || !incident.value) return;
+  attachmentError.value = '';
+  uploading.value = true;
+  const reader = new FileReader();
+  reader.onerror = () => {
+    uploading.value = false;
+    attachmentError.value = '读取图片失败，请重试。';
+  };
+  reader.onload = () => {
+    const result = String(reader.result ?? '');
+    const base64 = result.slice(result.indexOf(',') + 1);
+    api
+      .addAttachment(incident.value!.id, file.name, base64)
+      .then((attachment) => {
+        attachments.value = [...attachments.value, attachment];
+      })
+      .catch((cause) => {
+        attachmentError.value = errorMessage(cause);
+      })
+      .finally(() => {
+        uploading.value = false;
+      });
+  };
+  reader.readAsDataURL(file);
 }
 
 // M3：候选根因、请求补采的理由与「新增证据排除了什么」
@@ -553,6 +597,54 @@ onUnmounted(() => {
               开始智能诊断
             </ElButton>
           </div>
+        </section>
+
+        <!-- M2：视觉附件 -->
+        <section class="proto-card">
+          <div class="section-heading">
+            <h2>视觉证据</h2>
+            <span class="muted text-12">只接受真实错误页面与运维截图</span>
+          </div>
+
+          <div class="filter-bar">
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              :disabled="uploading"
+              @change="onAttachmentSelected"
+            />
+            <span class="muted text-12">
+              {{ uploading ? '正在解析截图…' : 'PNG / JPEG / WebP，5MB 以内' }}
+            </span>
+          </div>
+
+          <p v-if="attachmentError" class="inline-error" role="alert">{{ attachmentError }}</p>
+
+          <div v-if="!attachments.length" class="empty compact">尚未上传截图。</div>
+
+          <div v-for="item in attachments" :key="item.id" class="filter-bar">
+            <strong class="text-12">{{ item.filename }}</strong>
+            <span class="muted text-12">
+              {{
+                item.observed_at_known
+                  ? `截图内观测时间 ${timeLabel(item.observed_at ?? '')}`
+                  : '时间未知：截图内没有可识别的观测时间'
+              }}
+            </span>
+            <span v-if="item.extracted_text" class="text-12">{{ item.extracted_text }}</span>
+            <span
+              v-for="uncertain in item.uncertain"
+              :key="uncertain"
+              class="state-badge"
+              data-tone="warning"
+            >
+              {{ uncertain }}
+            </span>
+          </div>
+
+          <p class="help-text">
+            上传时间不能代替截图实际发生时间；截图只作为线索，恢复与否仍以探针实测为准。
+          </p>
         </section>
 
         <!-- M4：服务影响图与复盘摘要 -->

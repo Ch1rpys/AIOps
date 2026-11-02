@@ -157,7 +157,10 @@ class Workflow:
 
     def collect(self, state: IncidentState):
         def operation():
-            items = self.evidence_agent.collect(Scenario(state.get("scenario_key", "MYSQL_DOWN")))
+            items = self.evidence_agent.collect(
+                Scenario(state.get("scenario_key", "MYSQL_DOWN")),
+                attachments=self.attachments_of(state),
+            )
             with self.store.session() as session, session.begin():
                 for item in items:
                     self.store.audit(
@@ -169,6 +172,12 @@ class Workflow:
             }
 
         return self.guarded(state, Status.COLLECTING, operation)
+
+    def attachments_of(self, state) -> list[dict]:
+        """工单挂载的截图附件。"""
+        with self.store.session() as session:
+            item = self.store.require(session, state["incident_id"])
+            return list(item.detail.get("attachments") or [])
 
     def after_collect(self, state):
         if state.get("error"):
@@ -190,6 +199,10 @@ class Workflow:
 
     def diagnose(self, state):
         def operation():
+            # 截图与实测证据冲突时先补查：图片本身不能决定恢复，也不能放行到审批页。
+            conflict = self.attachment_conflict(state)
+            if conflict:
+                raise DomainError("EVIDENCE_CONFLICT", conflict)
             result = self.diagnosis.diagnose(
                 {
                     "incident_id": state["incident_id"],
@@ -300,6 +313,10 @@ class Workflow:
 
     def plan(self, state):
         def operation():
+            # 截图与当前探针冲突时先补查，不进入恢复审批。
+            conflict = self.attachment_conflict(state)
+            if conflict:
+                raise DomainError("EVIDENCE_CONFLICT", conflict)
             result = self.planner.plan(
                 {
                     "diagnosis": state["diagnosis"],
@@ -328,6 +345,17 @@ class Workflow:
             return {"plan": result.model_dump(mode="json"), "plan_id": plan_id}
 
         return self.guarded(state, Status.PLANNING, operation)
+
+    @staticmethod
+    def attachment_conflict(state) -> str | None:
+        """附件与实测证据冲突时给出明确提示；图片本身不决定恢复。"""
+        for item in state.get("evidence", []):
+            if item.get("kind") != "attachment":
+                continue
+            note = (item.get("raw") or {}).get("note", "")
+            if note.startswith("时间或证据冲突"):
+                return note
+        return None
 
     def approval(self, state):
         # 恢复时会重放本节点；中断之前没有写入或外部副作用。

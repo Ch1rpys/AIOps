@@ -264,6 +264,13 @@ class Store:
             if lease is not None and lease.holder == holder:
                 session.delete(lease)
 
+    def append_attachment(self, session: Session, item: Incident, attachment: dict) -> list[dict]:
+        """把附件挂到工单上；真值与处置链不受影响。"""
+        attachments = list(item.detail.get("attachments") or [])
+        attachments.append(attachment)
+        item.detail = {**item.detail, "attachments": attachments}
+        return attachments
+
     def save_evaluation_run(
         self,
         run: EvaluationRun,

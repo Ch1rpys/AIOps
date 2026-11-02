@@ -33,7 +33,12 @@ class EvidenceAgent:
             r"(?i)(password|api[_-]?key|authorization)\s*[:=]\s*\S+", r"\1=[REDACTED]", text
         )
 
-    def collect(self, scenario: Scenario = Scenario.MYSQL_DOWN) -> list[Evidence]:
+    def collect(
+        self,
+        scenario: Scenario = Scenario.MYSQL_DOWN,
+        attachments: list[dict] | None = None,
+        probes: list[Probe] | None = None,
+    ) -> list[Evidence]:
         definition = SCENARIOS[scenario]
         snapshot = self.docker.snapshot()
         evidence = [Evidence(source="docker-compose", kind="container_state", raw=snapshot)]
@@ -49,6 +54,10 @@ class EvidenceAgent:
                     raw={"text": self.redact(self.docker.logs(service))},
                 )
             )
+        if attachments:
+            observed = [Probe.model_validate(item.raw) for item in evidence if item.kind == "probe"]
+            for attachment in attachments:
+                evidence.append(self.attachment_evidence(attachment, observed))
         path = ROOT / f"knowledge/runbooks/{definition.runbook}.md"
         content = path.read_text(encoding="utf-8")
         evidence.append(
@@ -59,6 +68,26 @@ class EvidenceAgent:
             )
         )
         return evidence
+
+    @staticmethod
+    def attachment_evidence(attachment: dict, probes: list[Probe]) -> Evidence:
+        """附件证据：截图只作为线索，恢复与否仍以探针实测为准。"""
+        anomalies = attachment.get("anomalies") or []
+        note = attachment_conflict(attachment, probes) or "截图只作为线索，恢复与否仍以探针实测为准"
+        return Evidence(
+            source=f"attachment:{attachment.get('filename', 'screenshot')}",
+            kind="attachment",
+            raw={
+                "sha256": attachment.get("sha256"),
+                "extracted_text": attachment.get("extracted_text", ""),
+                "anomalies": anomalies,
+                "observed_at": attachment.get("observed_at"),
+                "observed_at_known": attachment.get("observed_at_known", False),
+                "uncertain": attachment.get("uncertain", []),
+                "note": note,
+            },
+            attachment=attachment,
+        )
 
     def collect_domain(self) -> list[Evidence]:
         """盲诊采证：四个服务全量观测，不带任何场景标识。
@@ -92,6 +121,25 @@ class EvidenceAgent:
             )
         )
         return evidence
+
+
+def attachment_conflict(attachment: dict, probes: list[Probe]) -> str | None:
+    """截图与当前探针状态是否冲突。
+
+    - 时间未知：不能拿它证明「现在是坏的」，也不能证明「现在是好的」；
+    - 时间早于当前观测且截图显示异常：历史异常，不能用来触发恢复。
+    """
+    if not attachment:
+        return None
+    anomalies = attachment.get("anomalies") or []
+    if not attachment.get("observed_at_known"):
+        if anomalies:
+            return "时间或证据冲突：截图显示异常但没有可识别的观测时间，需要补查后再判断"
+        return "时间未知：截图没有可识别的观测时间，只能作为线索"
+    failing = [probe.name for probe in probes if probe.verdict == Verdict.FAIL]
+    if anomalies and not failing:
+        return "时间或证据冲突：截图显示异常但当前探针健康，需要补查，不能直接触发恢复"
+    return None
 
 
 def fault_observed(evidence: list[Evidence], scenario: Scenario = Scenario.MYSQL_DOWN) -> bool:

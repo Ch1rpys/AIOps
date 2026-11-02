@@ -77,6 +77,30 @@ class Evidence(StrictModel):
     kind: str
     raw: dict[str, Any]
     captured_at: str = Field(default_factory=now)
+    # M2 视觉附件元信息：可选字段，现有证据不填时序列化结果不变。
+    # 放在 Evidence 侧而不是 Diagnosis / Plan：给模型看的契约要保持精简。
+    attachment: dict[str, Any] | None = None
+
+
+class VisionAnomaly(StrictModel):
+    """截图里识别出的异常区域。"""
+
+    description: str = Field(min_length=1, max_length=500)
+    region: list[float] = Field(default_factory=list, max_length=4)
+    text: str = Field(default="", max_length=500)
+
+
+class VisionObservation(StrictModel):
+    """截图里能读出来的观测。
+
+    observed_at 是「图中可识别的观测时间」：截图里没有时间戳就必须为 null，
+    不允许拿上传时间顶替。
+    """
+
+    observed_at: str | None = None
+    extracted_text: str = Field(default="", max_length=4000)
+    anomalies: list[VisionAnomaly] = Field(default_factory=list, max_length=10)
+    uncertain: list[str] = Field(default_factory=list, max_length=10)
 
 
 REQUIRED_EVIDENCE_KINDS = frozenset({"container_state", "probe"})
@@ -183,6 +207,14 @@ class ApprovalRequest(StrictModel):
     plan_id: str = Field(min_length=1, max_length=80)
     decision: Literal["approve", "reject"]
     comment: str = Field(default="", max_length=500)
+
+
+class AttachmentRequest(StrictModel):
+    """上传一张真实错误页面或运维截图。"""
+
+    filename: str = Field(min_length=1, max_length=120)
+    content_base64: str = Field(min_length=1, max_length=20_000_000)
+    note: str = Field(default="", max_length=500)
 
 
 class EvaluationRequest(StrictModel):

@@ -102,6 +102,13 @@ function formatProbeObserved(probe: Probe): string {
       </span>
     </div>
 
+    <div v-else class="verdict-large-banner verification-result" data-verdict="WAITING">
+      <div>
+        <div class="verdict-title" style="color: var(--ink-secondary)">等待复测</div>
+        <div class="verdict-desc">处置执行后由独立探针判定恢复结果</div>
+      </div>
+    </div>
+
     <div v-if="windowState?.enabled" class="probe-compact-list sample-details">
       <div class="probe-compact-row">
         <div style="min-width: 0; display: flex; flex-direction: column">
@@ -116,13 +123,6 @@ function formatProbeObserved(probe: Probe): string {
         </span>
       </div>
       <p class="help-text">窗口内健康只说明这一段时间的观测，不代表永久不再复发。</p>
-    </div>
-
-    <div v-else class="verdict-large-banner verification-result" data-verdict="WAITING">
-      <div>
-        <div class="verdict-title" style="color: var(--ink-secondary)">等待复测</div>
-        <div class="verdict-desc">处置执行后由独立探针判定恢复结果</div>
-      </div>
     </div>
 
     <!-- 紧凑探针行展示 -->

@@ -25,10 +25,22 @@ RUNNING = {
 
 
 class Platform:
-    def __init__(self, settings, store, docker, probes, evidence, workflow, client, mode="REAL"):
+    def __init__(
+        self,
+        settings,
+        store,
+        docker,
+        probes,
+        evidence,
+        workflow,
+        client,
+        mode="REAL",
+        attachments=None,
+    ):
         self.settings, self.store, self.docker = settings, store, docker
         self.probes, self.evidence, self.workflow = probes, evidence, workflow
         self.client, self.mode = client, mode
+        self.attachments = attachments
         self.lock = threading.RLock()
 
     def recover(self):
@@ -88,6 +100,9 @@ class Platform:
             and self.settings.planner_model
             and self.settings.planner_api_key.get_secret_value()
         )
+        vision_configured = bool(
+            self.attachments is not None and self.attachments.provider.configured()
+        )
         return {
             "platform": "PASS",
             "mode": self.mode,
@@ -96,6 +111,16 @@ class Platform:
                 "status": "UNKNOWN",
                 "configured": configured,
                 "reason": "须由真实模型调用验证连通性",
+            },
+            # 空值不伪装成已配置：没配视觉模型就如实显示 UNKNOWN。
+            "vision": {
+                "status": "UNKNOWN",
+                "configured": vision_configured,
+                "reason": (
+                    "视觉模型未配置，视觉证据不可用"
+                    if not vision_configured
+                    else "须由真实模型调用验证连通性"
+                ),
             },
             "admin_configured": bool(self.settings.admin_token.get_secret_value()),
             "lab": self.environment(),

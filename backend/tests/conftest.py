@@ -11,7 +11,9 @@ from app.schemas.domain import (
     Scenario,
     Verdict,
     Verification,
+    VisionObservation,
 )
+from app.services.attachments import AttachmentService
 from app.services.evaluation import EvaluationService
 from app.services.executor import ActionExecutor
 from app.services.platform import Platform
@@ -60,6 +62,7 @@ class TestWorld:
         self.candidates: list[dict] = []
         self.window_enabled = False
         self.window_instability = False
+        self.vision_observation = VisionObservation()
 
     @property
     def stopped(self) -> bool:
@@ -197,11 +200,26 @@ class TestWorld:
             trace.usage = None
         return review
 
+    def analyze(self, image_base64, mime, note=""):
+        return self.vision_observation
+
+    def configured(self):
+        return True
+
     def factory(self, settings, store, saver, client):
         evidence = EvidenceAgent(settings, self, self)
         workflow = Workflow(store, evidence, self, self, ActionExecutor(store, self), self, saver)
+        attachments = AttachmentService(settings, self)
         platform = Platform(
-            settings, store, self, self, evidence, workflow, client, mode="TEST/MOCK"
+            settings,
+            store,
+            self,
+            self,
+            evidence,
+            workflow,
+            client,
+            mode="TEST/MOCK",
+            attachments=attachments,
         )
         evaluation = EvaluationService(settings, store, self, self, evidence, self)
         return platform, evaluation

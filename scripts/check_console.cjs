@@ -422,6 +422,32 @@ async function run() {
     },
   );
   await check(
+    "TEST/MOCK visual attachment upload states the observation time honestly",
+    async () => {
+      await page.goto(`${base}/incidents`);
+      await page.locator(".incidents-table tbody tr").first().waitFor();
+      await page.locator(".incidents-table tbody tr .incident-link").first().click();
+      await page.getByRole("heading", { name: "视觉证据" }).waitFor();
+      await inputToken(page);
+      await page.setInputFiles('input[type="file"]', {
+        name: "shot.png",
+        mimeType: "image/png",
+        buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]),
+      });
+      // 没有可识别时间戳的截图必须说「时间未知」，不能拿上传时间顶替。
+      await page.getByText("时间未知：截图内没有可识别的观测时间").first().waitFor();
+      const card = await page
+        .locator(".proto-card")
+        .filter({ hasText: "视觉证据" })
+        .innerText();
+      assert.ok(
+        card.includes("上传时间不能代替截图实际发生时间"),
+        "honesty note about observation time must be shown",
+      );
+      await noOverflow(page);
+    },
+  );
+  await check(
     "TEST/MOCK impact graph and review summary distinguish relation kinds",
     async () => {
       await page.goto(`${base}/incidents`);
