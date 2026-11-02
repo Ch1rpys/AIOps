@@ -34,11 +34,22 @@ def last_container_state(item: dict) -> dict:
 
 
 def collected_probes(item: dict) -> list[dict]:
-    return [
-        payload.get("raw") or {}
-        for payload in evidence_payloads(item)
-        if payload.get("kind") == "probe"
-    ]
+    """同名探针只保留最后一次观测。
+
+    复采与受限补采都会把同一批探针再记一遍，
+    全部堆在一起会出现「节点状态是 running 却标着异常」这种自相矛盾。
+    """
+    latest: dict[str, dict] = {}
+    order: list[str] = []
+    for payload in evidence_payloads(item):
+        if payload.get("kind") != "probe":
+            continue
+        raw = payload.get("raw") or {}
+        name = str(raw.get("name"))
+        if name not in latest:
+            order.append(name)
+        latest[name] = raw
+    return [latest[name] for name in order]
 
 
 def service_of_evidence(topology, payload: dict) -> str | None:

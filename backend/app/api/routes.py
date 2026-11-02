@@ -156,7 +156,12 @@ def add_attachment(
 ):
     """上传一张真实错误页面或运维截图，并提取其中的观测。"""
     attachment = service.attachments.store(body.filename, body.content_base64)
-    attachment = service.attachments.analyze(attachment, body.note)
+    try:
+        attachment = service.attachments.analyze(attachment, body.note)
+    except DomainError:
+        # 分析失败时刚存的文件没有任何工单引用，直接删掉，不留孤儿文件。
+        service.attachments.discard(attachment)
+        raise
     with service.store.session() as session, session.begin():
         item = service.store.require(session, incident_id)
         service.store.append_attachment(session, item, attachment)

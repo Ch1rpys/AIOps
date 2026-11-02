@@ -153,6 +153,11 @@ def render_markdown(transcript: dict, summary: dict | None = None) -> str:
     lines.extend(["", "## 结论分布", ""])
     lines.append(f"- 实验次数：{len(results)}")
     lines.append(f"- 拒答（INSUFFICIENT_EVIDENCE）：{rejections} 次")
+    invalid = sum(1 for item in results if item.get("status") == "INVALID_RESPONSE")
+    lines.append(
+        f"- 契约违约（模型没按约定格式作答）：{invalid} 次"
+        "（计入准确率分母，与「自信地答错」同等处理，不美化）"
+    )
     lines.append(f"- 自相矛盾（证据不足但给了确定根因）：{contradictions} 次")
     if rejections == 0:
         lines.append(

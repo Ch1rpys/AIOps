@@ -145,6 +145,50 @@ def test_blind_payload_has_no_scenario_markers(tmp_path, world, mode):
         assert label not in text, f"盲诊载荷泄漏了答案标签 {label}"
 
 
+def test_review_payload_has_no_scenario_markers(tmp_path, world):
+    """B 臂的复核入口同样是盲诊路径：最终载荷里不能有场景标识。
+
+    §4.3 要求对盲诊路径的最终序列化载荷断言，两个入口都要覆盖。
+    """
+    settings = blind_settings(tmp_path, "json_schema")
+    evidence = EvidenceAgent(settings, world, world).collect_domain()
+    ids = [item.id for item in evidence]
+    recorder = Recorder(
+        {
+            "verdict": "agree",
+            "root_cause": "MYSQL_SERVICE_STOPPED",
+            "reason": "TEST/MOCK",
+            "evidence_ids": ids,
+            "evidence_sufficient": True,
+        }
+    )
+    client = httpx.Client(transport=httpx.MockTransport(recorder.handler))
+    provider = HolmesDiagnosisProvider(settings, client)
+    provider.review_domain(
+        {
+            "evidence": [item.model_dump(mode="json") for item in evidence],
+            "previous_diagnosis": {
+                "root_cause": "MYSQL_SERVICE_STOPPED",
+                "summary": "TEST/MOCK",
+                "evidence_ids": ids,
+                "confidence": 0.9,
+                "evidence_sufficient": True,
+            },
+        }
+    )
+    payload = recorder.payload
+    text = checkable_text(payload)
+    for token in SCENARIO_MARKERS + SCENARIO_RUNBOOKS + REGISTERED_ACTIONS + POINTING_FIELDS:
+        assert token not in text, f"复核载荷泄漏了 {token}"
+    # 复核者看得到第一次诊断自己的结论（那是模型自己的输出，不是真值），
+    # 但除此之外，载荷里不能出现任何答案标签。
+    ask = json.loads(payload["ask"])
+    ask.pop("previous_diagnosis", None)
+    without_previous = {**payload, "ask": json.dumps(ask, ensure_ascii=False)}
+    for label in ANSWER_LABELS:
+        assert label not in checkable_text(without_previous), f"复核载荷泄漏了答案标签 {label}"
+
+
 def test_blind_payload_declares_the_narrowed_answer_space(tmp_path, world):
     """答案空间确实被根因枚举收窄：这一点必须在评测报告里显式声明。"""
     settings = blind_settings(tmp_path, "json_schema")

@@ -265,6 +265,7 @@ export interface EvaluationArmSummary {
   rejection_rate: number | null;
   avg_latency_ms: number | null;
   model_calls_avg: number | null;
+  model_calls_unknown: number;
   /** §9.2：耗时按阶段拆分；审批等待在纯诊断下不适用。 */
   timing: {
     model_ms: number | null;
@@ -291,6 +292,7 @@ export interface EndToEndSummary {
   recovery_success_rate: number | null;
   model_calls: number;
   model_calls_avg: number | null;
+  model_calls_unknown: number;
   note: string;
 }
 

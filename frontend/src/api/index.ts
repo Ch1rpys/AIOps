@@ -15,11 +15,18 @@ import type {
   Status,
 } from '../types';
 
-async function request<T>(path: string, method = 'GET', body?: unknown, key?: string): Promise<T> {
+async function request<T>(
+  path: string,
+  method = 'GET',
+  body?: unknown,
+  key?: string,
+  admin = false,
+): Promise<T> {
   const headers: Record<string, string> = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
-  // 令牌随请求一起带上：评测视图之类的只读接口也要按管理员权限裁剪返回。
-  if (adminToken.value) headers['X-Admin-Token'] = adminToken.value;
+  // 令牌只发给确实需要管理员权限的请求：写操作与评测视图。
+  // 普通只读接口不带令牌，凭据不必铺满所有请求。
+  if (admin && adminToken.value) headers['X-Admin-Token'] = adminToken.value;
   if (key) headers['Idempotency-Key'] = key;
   try {
     const response = await fetch(`/api${path}`, {
@@ -74,22 +81,27 @@ export const api = {
       'POST',
       { confirm: true },
       key,
+      true,
     ),
-  reset: (key: string) => request('/lab/reset', 'POST', { confirm: true }, key),
-  diagnose: (id: string) => request(`/incidents/${encodeURIComponent(id)}/diagnose`, 'POST'),
+  reset: (key: string) => request('/lab/reset', 'POST', { confirm: true }, key, true),
+  diagnose: (id: string) =>
+    request(`/incidents/${encodeURIComponent(id)}/diagnose`, 'POST', undefined, undefined, true),
   approve: (id: string, planId: string, decision: 'approve' | 'reject', comment: string) =>
     request(
       `/incidents/${encodeURIComponent(id)}/approval`,
       'POST',
       { plan_id: planId, decision, comment },
       `${planId}-${decision}`,
+      true,
     ),
   addAttachment: (id: string, filename: string, contentBase64: string, note = '') =>
-    request<Attachment>(`/incidents/${encodeURIComponent(id)}/attachments`, 'POST', {
-      filename,
-      content_base64: contentBase64,
-      note,
-    }),
+    request<Attachment>(
+      `/incidents/${encodeURIComponent(id)}/attachments`,
+      'POST',
+      { filename, content_base64: contentBase64, note },
+      undefined,
+      true,
+    ),
   incidentAttachments: (id: string) =>
     request<Attachment[]>(`/incidents/${encodeURIComponent(id)}/attachments`),
   incidentImpact: (id: string) =>
@@ -101,12 +113,22 @@ export const api = {
     if (options.limit !== undefined) query.set('limit', String(options.limit));
     if (options.offset !== undefined) query.set('offset', String(options.offset));
     if (options.evaluationView) query.set('view', 'evaluation');
-    return request<EvaluationRunRow[]>(`/evaluation/runs?${query}`);
+    return request<EvaluationRunRow[]>(
+      `/evaluation/runs?${query}`,
+      'GET',
+      undefined,
+      undefined,
+      !!options.evaluationView,
+    );
   },
   evaluationSummary: () => request<EvaluationSummary>('/evaluation/summary'),
   evaluationRun: (id: string, evaluationView = false) =>
     request<EvaluationRunDetail>(
       `/evaluation/runs/${encodeURIComponent(id)}${evaluationView ? '?view=evaluation' : ''}`,
+      'GET',
+      undefined,
+      undefined,
+      evaluationView,
     ),
   triggerEvaluation: (scenario: ScenarioKey, arms: EvaluationArm[], key: string) =>
     request<{ accepted: boolean; scenario: string; arms: EvaluationArm[]; status: string }>(
@@ -114,6 +136,7 @@ export const api = {
       'POST',
       { scenario, arms, confirm: true },
       key,
+      true,
     ),
 };
 

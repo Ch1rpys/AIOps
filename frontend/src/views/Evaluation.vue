@@ -200,6 +200,7 @@ onUnmounted(() => {
             <th>有效样本</th>
             <th>根因正确率</th>
             <th>拒答率</th>
+            <th>自相矛盾</th>
             <th>平均耗时（臂内）</th>
             <th>平均模型调用</th>
             <th>token 用量</th>
@@ -218,8 +219,17 @@ onUnmounted(() => {
             </td>
             <td>{{ percent(arm.accuracy) }}</td>
             <td>{{ percent(arm.rejection_rate) }}</td>
+            <td>
+              {{ arm.contradictory }}
+              <span class="muted text-12">（自证充分却答错）</span>
+            </td>
             <td>{{ durationLabel(arm.avg_latency_ms ?? undefined) }}</td>
-            <td>{{ arm.model_calls_avg ?? '未知' }}</td>
+            <td>
+              {{ arm.model_calls_avg ?? '未知' }}
+              <span v-if="arm.model_calls_unknown" class="muted text-12">
+                （{{ arm.model_calls_unknown }} 条未知未计入）
+              </span>
+            </td>
             <td>{{ tokenCell(arm.token_usage_total, arm.token_usage_known) }}</td>
             <td class="muted">不适用</td>
             <td class="muted">不适用</td>
