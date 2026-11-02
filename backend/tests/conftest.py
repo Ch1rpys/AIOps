@@ -267,11 +267,11 @@ def client(settings, world):
         yield client
 
 
-def injected(client):
+def injected(client, scenario="MYSQL_DOWN", key="TEST-inject-0001"):
     response = client.post(
-        "/api/scenarios/MYSQL_DOWN/inject",
+        f"/api/scenarios/{scenario}/inject",
         json={"confirm": True},
-        headers={"Idempotency-Key": "TEST-inject-0001"},
+        headers={"Idempotency-Key": key},
     )
     assert response.status_code == 201, response.text
     return response.json()["incident_id"]

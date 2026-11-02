@@ -4,6 +4,7 @@
 已观测异常（有实测支撑）、配置依赖（启动顺序）、推断传播（沿业务边推断）。
 """
 
+import pytest
 from app.services.topology import (
     CONFIGURED,
     INFERRED,
@@ -133,3 +134,37 @@ def test_impact_graph_overlays_probes_logs_and_diagnosis_citations(client, world
     assert mysql["diagnosis_evidence_ids"]
     diagnosis = client.get(f"/api/incidents/{incident_id}").json()["detail"]["diagnosis"]
     assert set(mysql["diagnosis_evidence_ids"]) <= set(diagnosis["evidence_ids"])
+
+
+@pytest.mark.parametrize(
+    ("scenario", "target", "impacted", "unaffected"),
+    [
+        ("MYSQL_DOWN", "demo-mysql", "/db-check", "/cache-check"),
+        ("REDIS_DOWN", "demo-redis", "/cache-check", "/db-check"),
+    ],
+)
+def test_relation_kinds_hold_in_more_than_one_scenario(
+    client, world, scenario, target, impacted, unaffected
+):
+    """M4 退出条件：三类关系至少在两个场景上都能区分。
+
+    只在一个场景验证过，说明拓扑映射可能是照着那个场景写死的。
+    """
+    incident_id = injected(client, scenario, f"TEST-inject-{scenario}")
+    graph = client.get(f"/api/incidents/{incident_id}/impact").json()
+    kinds = {edge["kind"] for edge in graph["edges"]}
+    assert CONFIGURED in kinds
+    assert INFERRED in kinds
+    assert graph["legend"][OBSERVED].startswith("已观测异常")
+    assert graph["legend"][CONFIGURED].startswith("配置依赖")
+    assert graph["legend"][INFERRED].startswith("推断传播")
+    node = next(item for item in graph["nodes"] if item["id"] == target)
+    assert node["observed_anomaly"] is True
+    assert node["state"] == "exited"
+    interfaces = {item["path"]: item for item in graph["interfaces"]}
+    assert interfaces[impacted]["impacted"] is True
+    assert interfaces[unaffected]["impacted"] is False
+    # 启动顺序边始终只是配置依赖，不能被当成推断传播。
+    startup = [edge for edge in graph["edges"] if edge["kind"] == CONFIGURED]
+    assert startup
+    assert all(edge["inferred"] is False for edge in startup)
