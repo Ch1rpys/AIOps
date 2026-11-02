@@ -210,7 +210,7 @@ onUnmounted(() => {
       </label>
       <label>
         <span>实验臂</span>
-        <select v-model="arms" multiple :disabled="triggering" size="3">
+        <select v-model="arms" multiple :disabled="triggering" size="3" style="min-height: 82px">
           <option value="A">A · 单次诊断</option>
           <option value="B">B · 多 Agent 复核</option>
           <option value="C">C · 增加视觉证据</option>
