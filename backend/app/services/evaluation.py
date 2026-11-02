@@ -264,7 +264,11 @@ class EvaluationService:
         return evidence, max(0, collected - 1), round((time.monotonic() - started) * 1000)
 
     def _visual_evidence(self, attachment_ids: list[str]) -> list[Evidence]:
-        """把上传的截图并入同一份快照：所有臂看到完全相同的输入。"""
+        """把上传的截图转成证据条目。
+
+        这些条目只进 C 臂：A/B 是「纯文本证据」（§4.5）。
+        文本快照仍然三臂共用同一个 snapshot_hash。
+        """
         items: list[Evidence] = []
         for attachment_id in attachment_ids:
             if self.attachments is None:
@@ -336,16 +340,17 @@ class EvaluationService:
         # A/B 是纯文本证据；C 臂在同一份文本快照上再加视觉证据（§4.5）。
         arm_evidence = snapshot + (visual if arm == "C" else [])
         payload = {"evidence": [item.model_dump(mode="json") for item in arm_evidence]}
+        # 必引 id 仍按文本基线算：视觉证据是加分项，不是必引项。
         required = required_evidence_ids(snapshot)
         record: dict = {"extra_collects": extra_collects}
         try:
             if arm == "A":
-                record.update(self._arm_a(payload, snapshot, required, budget, timeout))
+                record.update(self._arm_a(payload, arm_evidence, required, budget, timeout))
             elif arm == "B":
-                record.update(self._arm_b(payload, snapshot, required, budget, timeout))
+                record.update(self._arm_b(payload, arm_evidence, required, budget, timeout))
             elif arm == "C":
                 # C 臂 = B 臂 + 同一份快照里的视觉证据（§4.5）。
-                record.update(self._arm_b(payload, snapshot, required, budget, timeout))
+                record.update(self._arm_b(payload, arm_evidence, required, budget, timeout))
             else:
                 raise DomainError("EVALUATION_ARM_UNSUPPORTED", "该实验臂尚未实现", 409)
         except Exception as error:

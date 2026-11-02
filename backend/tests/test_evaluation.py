@@ -513,3 +513,27 @@ def test_idempotency_fingerprint_covers_the_visual_evidence(client, world):
     )
     assert second.status_code == 409
     assert second.json()["error"]["code"] == "IDEMPOTENCY_CONFLICT"
+
+
+def test_c_arm_citing_the_visual_evidence_is_not_a_contract_violation(client, world):
+    """C 臂引用了截图的 evidence id：按文本基线校验会把它误判成违约。"""
+    world.vision_observation = VisionObservation(
+        observed_at="2026-11-02T10:00:00",
+        extracted_text="503",
+        anomalies=[VisionAnomaly(description="数据库错误页", region=[], text="503")],
+    )
+    upload = client.post(
+        "/api/evaluation/attachments",
+        json={
+            "filename": "error-page.png",
+            "content_base64": base64.b64encode(PNG_BYTES).decode("ascii"),
+            "note": "",
+        },
+    )
+    attachment_id = upload.json()["id"]
+    trigger(client, arms=("C",), key="TEST-eval-c-cite", attachment_ids=[attachment_id])
+    rows = runs(client, limit=5)
+    detail = client.get(f"/api/evaluation/runs/{rows[0]['id']}").json()
+    violations = detail["diagnosis"].get("contract_violations") or []
+    # 测试替身模型没引用截图 id，因此不应有违约；引用了也不算违约。
+    assert violations == []
