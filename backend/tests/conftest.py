@@ -55,6 +55,7 @@ class TestWorld:
         self.evidence_sufficient = True
         self.blind_contexts = []
         self.blind_error = None
+        self.blind_review_error = None
         self.blind_root_cause = "MYSQL_SERVICE_STOPPED"
         self.review_verdict = "agree"
         self.review_root_cause = "MYSQL_SERVICE_STOPPED"
@@ -189,6 +190,8 @@ class TestWorld:
 
     def review_domain(self, context, required_ids=None, timeout=None, trace=None):
         self.blind_contexts.append(context)
+        if self.blind_review_error:
+            raise self.blind_review_error
         if self.blind_error:
             raise self.blind_error
         review = DomainReview(

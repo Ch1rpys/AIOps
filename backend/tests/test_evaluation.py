@@ -5,6 +5,7 @@
 """
 
 import pytest
+from app.config import DomainError
 from app.repositories.store import EvaluationRun
 from app.schemas.domain import now
 
@@ -218,3 +219,25 @@ def test_evaluation_requires_admin_token(client):
         headers={"Idempotency-Key": "TEST-eval-noauth"},
     )
     assert response.status_code == 403
+
+
+def test_review_failure_keeps_the_first_conclusion(client, world):
+    """复核失败也要留下第一次的原始结论，不能只留下一个错误码。"""
+    world.blind_review_error = DomainError("AI_UNAVAILABLE", "TEST/MOCK 复核不可用", 503)
+    trigger(client)
+    rows = runs(client)
+    assert rows
+    detail = client.get(f"/api/evaluation/runs/{rows[0]['id']}").json()
+    assert detail["status"] == "ERROR"
+    assert detail["diagnosis"]["root_cause"] == "MYSQL_SERVICE_STOPPED"
+    assert detail["diagnosis"]["adjudication"]["first"]["root_cause"] == "MYSQL_SERVICE_STOPPED"
+    assert detail["diagnosis"]["adjudication"]["review"] is None
+    # 基础设施故障不算模型能力失败，不进正确率分母。
+    summary = client.get("/api/evaluation/summary").json()
+    arm_b = next(item for item in summary["arms"] if item["arm"] == "B")
+    arm_a = next(item for item in summary["arms"] if item["arm"] == "A")
+    assert arm_b["errors"] >= 1
+    assert arm_b["valid_runs"] == 0
+    # A 臂没有受影响：同一个快照上 A 仍然可评分。
+    assert arm_a["errors"] == 0
+    assert arm_a["valid_runs"] == 1

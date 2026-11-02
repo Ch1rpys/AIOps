@@ -144,6 +144,31 @@ def test_review_evidence_shows_observations_but_not_the_truth():
         assert token not in text
 
 
+def test_report_flags_missing_rejections():
+    """9 次全是确定答案本身就是要报告的问题，不能当作好结果。"""
+    transcript = {
+        "started_at": "t0",
+        "arms": ["A"],
+        "notes": [],
+        "results": [
+            {
+                "run_id": "evalrun_x",
+                "arm": "A",
+                "scenario": "MYSQL_DOWN",
+                "round": 1,
+                "root_cause": "MYSQL_SERVICE_STOPPED",
+                "evidence_sufficient": True,
+                "rejected": 0,
+                "correct": 1,
+                "diagnosis": {},
+            }
+        ],
+    }
+    report = run_evaluation.render_markdown(transcript)
+    assert "本次没有出现任何拒答" in report
+    assert "结论分布" in report
+
+
 def test_report_renders_without_summary():
     report = run_evaluation.render_markdown(TRANSCRIPT)
     assert "复现基线" in report

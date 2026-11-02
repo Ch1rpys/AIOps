@@ -269,12 +269,34 @@ class EvaluationService:
 
         review_trace = ModelTrace()
         budget.check()
-        review = self.provider.review_domain(
-            {**payload, "previous_diagnosis": first.model_dump(mode="json")},
-            required_ids=required,
-            timeout=timeout,
-            trace=review_trace,
-        )
+        try:
+            review = self.provider.review_domain(
+                {**payload, "previous_diagnosis": first.model_dump(mode="json")},
+                required_ids=required,
+                timeout=timeout,
+                trace=review_trace,
+            )
+        except DomainError as error:
+            # 复核失败也要留下第一次的原始结论：失败与原始输出全部落库，不美化（§9.3）。
+            return {
+                "status": "ERROR",
+                "code": error.code,
+                "message": error.message,
+                "root_cause": first.root_cause,
+                "evidence_sufficient": first.evidence_sufficient,
+                "summary": first.summary,
+                "evidence_ids": list(first.evidence_ids),
+                "confidence": first.confidence,
+                "model_calls": budget.calls,
+                "model_ms": first_trace.latency_ms,
+                "usage": first_trace.usage,
+                "contract_violations": self._violations(first, snapshot),
+                "adjudication": {
+                    "rule": "复核失败，未裁决；保留第一次诊断的原始结论",
+                    "first": first.model_dump(mode="json"),
+                    "review": None,
+                },
+            }
         budget.charge()
 
         if review.verdict == "agree":

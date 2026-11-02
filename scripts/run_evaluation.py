@@ -144,6 +144,21 @@ def render_markdown(transcript: dict, summary: dict | None = None) -> str:
     lines.append(f"- 拦截率：{end_to_end.get('block_rate')}（{blocked} 条被拦下）")
     lines.append(f"- 恢复成功率：{end_to_end.get('recovery_success_rate')}")
     lines.append(f"- {end_to_end.get('note', '')}")
+    rejections = sum(1 for item in results if item.get("rejected") == 1)
+    contradictions = sum(
+        1
+        for item in results
+        if item.get("evidence_sufficient") is False and not item.get("rejected")
+    )
+    lines.extend(["", "## 结论分布", ""])
+    lines.append(f"- 实验次数：{len(results)}")
+    lines.append(f"- 拒答（INSUFFICIENT_EVIDENCE）：{rejections} 次")
+    lines.append(f"- 自相矛盾（证据不足但给了确定根因）：{contradictions} 次")
+    if rejections == 0:
+        lines.append(
+            "- **本次没有出现任何拒答**：如果输入里确实还有线索、或模型在过度自信，"
+            "这本身就是要报告的问题，不能因为「全是确定答案」就当作好结果。"
+        )
     lines.extend(["", "## 模型原始结论", ""])
     for item in results:
         lines.extend(
