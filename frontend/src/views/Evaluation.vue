@@ -58,10 +58,12 @@ function ms(value: number | null | undefined): string {
   return value < 1000 ? `${value} ms` : `${(value / 1000).toFixed(1)} 秒`;
 }
 
-function tokenCell(total: number | null, known: number): string {
-  // token 未返回就标「未知」，不用 0 顶替。
-  if (total === null) return '未知';
-  return `${total}（${known} 条有 usage）`;
+function tokenCell(total: number | null, known: number, partial = 0): string {
+  // token 未返回就标「未知」，不用 0 顶替；部分已知也要说出来。
+  if (total === null) {
+    return partial ? `未知（${partial} 条仅部分已知）` : '未知';
+  }
+  return `${total}（${known} 条有 usage${partial ? `，${partial} 条仅部分已知` : ''}）`;
 }
 
 function truthCell(row: EvaluationRunRow): string {
@@ -287,7 +289,9 @@ onUnmounted(() => {
                 （{{ arm.model_calls_unknown }} 条未知未计入）
               </span>
             </td>
-            <td>{{ tokenCell(arm.token_usage_total, arm.token_usage_known) }}</td>
+            <td>
+              {{ tokenCell(arm.token_usage_total, arm.token_usage_known, arm.token_usage_partial) }}
+            </td>
             <td class="muted">不适用</td>
             <td class="muted">不适用</td>
           </tr>

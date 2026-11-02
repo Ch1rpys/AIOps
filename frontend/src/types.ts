@@ -278,6 +278,8 @@ export interface EvaluationArmSummary {
   };
   token_usage_total: number | null;
   token_usage_known: number;
+  /** 只有部分已知时不进总量，单独计数。 */
+  token_usage_partial: number;
 }
 
 export interface EndToEndSummary {
