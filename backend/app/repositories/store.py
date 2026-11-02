@@ -102,6 +102,9 @@ class EvaluationLease(Base):
     acquired_at: Mapped[str] = mapped_column(String)
 
 
+# 评测租约的最长持有时间：超过即视为进程崩溃留下的陈旧租约。
+EVALUATION_LEASE_TTL_SECONDS = 900
+
 SCHEMA_VERSION = 2
 SUPPORTED_SCHEMA_VERSIONS = {0, 1, 2}
 
@@ -253,7 +256,14 @@ class Store:
             return True
 
     @staticmethod
-    def lease_expired(lease: EvaluationLease, ttl_seconds: int = 900) -> bool:
+    def lease_expired(
+        lease: EvaluationLease, ttl_seconds: int = EVALUATION_LEASE_TTL_SECONDS
+    ) -> bool:
+        """过期租约判定。
+
+        TTL 取 15 分钟：一次评测的最坏耗时约 2 分钟（注入 + 采集 + 两臂 + 恢复），
+        15 分钟既能覆盖正常情况，又能在进程崩溃后尽快解开工作台。
+        """
         try:
             acquired = datetime.fromisoformat(lease.acquired_at)
         except (TypeError, ValueError):
