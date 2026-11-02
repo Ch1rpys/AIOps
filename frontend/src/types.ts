@@ -73,6 +73,31 @@ export interface Diagnosis {
   evidence_ids: string[];
   confidence: number;
   evidence_sufficient: boolean;
+  /** M3：候选根因及其支持与反对证据。 */
+  candidates?: CandidateRootCause[];
+  /** M3：模型请求补采的检查与理由。 */
+  requested_checks?: CheckRequest[];
+}
+export interface CandidateRootCause {
+  root_cause: string;
+  support_evidence_ids: string[];
+  against_evidence_ids: string[];
+  missing_checks: string[];
+}
+export interface CheckRequest {
+  check_id: string;
+  reason: string;
+}
+export interface CollectedEvidence {
+  id?: string;
+  source?: string;
+  kind?: string;
+}
+export interface SupplementRecord {
+  round: number;
+  requested: CheckRequest[];
+  collected: CollectedEvidence[];
+  collected_at: string;
 }
 export interface AuditRecord {
   id: string;
@@ -92,6 +117,9 @@ export interface Incident extends IncidentSummary {
     diagnosis?: Diagnosis;
     error?: { code: string; message: string };
     verification?: { verdict: Verdict; samples: Probe[][]; captured_at: string };
+    /** M3：受限主动补采。 */
+    supplement?: SupplementRecord;
+    supplement_stopped?: string;
   };
 }
 

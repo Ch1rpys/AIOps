@@ -276,6 +276,9 @@ class Platform:
                     "attempt": 1,
                     "scenario_key": item["scenario_key"],
                     "collect_count": 0,
+                    "supplement_count": 0,
+                    "supplements": [],
+                    "started_at": now(),
                     "error": None,
                 }
             )

@@ -68,6 +68,7 @@ def create_app(settings: Settings | None = None, factory=None) -> FastAPI:
                     ActionExecutor(store, docker),
                     probes,
                     saver,
+                    settings,
                 )
                 service = Platform(settings, store, docker, probes, evidence, workflow, client)
                 evaluation_service = EvaluationService(

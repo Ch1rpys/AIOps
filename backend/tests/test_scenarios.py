@@ -48,12 +48,31 @@ class ScenarioWorld(TestWorld):
 
     def diagnose(self, context):
         self.diagnosis_contexts.append(context)
+        definition = SCENARIOS[Scenario(context["scenario_key"])]
         return Diagnosis(
-            root_cause=SCENARIOS[Scenario(context["scenario_key"])].root_cause,
+            root_cause=definition.root_cause,
             summary="TEST/MOCK",
             evidence_ids=[e["id"] for e in context["evidence"]],
             confidence=0.9,
             evidence_sufficient=True,
+            candidates=[
+                {
+                    "root_cause": definition.root_cause,
+                    "support_evidence_ids": [
+                        e["id"] for e in context["evidence"] if e.get("kind") == "container_state"
+                    ],
+                    "against_evidence_ids": [],
+                    "missing_checks": ["app_health"],
+                },
+                {
+                    "root_cause": "OTHER",
+                    "support_evidence_ids": [],
+                    "against_evidence_ids": [
+                        e["id"] for e in context["evidence"] if e.get("kind") == "probe"
+                    ],
+                    "missing_checks": ["app_health"],
+                },
+            ],
         )
 
     def plan(self, context):

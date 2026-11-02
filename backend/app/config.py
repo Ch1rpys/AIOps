@@ -7,6 +7,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_PROJECT = "aiops-demo"
 SERVICES = ("demo-mysql", "demo-redis", "demo-app", "demo-nginx")
+# 可补采的检查注册表：模型只能从这里选要补什么（见 docs/落地执行计划.md §6.2）。
+CHECK_IDS = (
+    "mysql_select_1",
+    "app_db_check",
+    "redis_roundtrip",
+    "app_cache_check",
+    "nginx_hello",
+    "app_health",
+)
 
 
 class Settings(BaseSettings):
@@ -40,6 +49,10 @@ class Settings(BaseSettings):
     evaluation_budget_seconds: int = Field(default=45, ge=5, le=300)
     evaluation_max_model_calls: int = Field(default=3, ge=1, le=10)
     evaluation_max_extra_collects: int = Field(default=2, ge=0, le=5)
+    # M3 受限主动补采：轮次、单轮检查数与总耗时预算都要有上限。
+    supplement_max_rounds: int = Field(default=2, ge=0, le=2)
+    supplement_max_checks: int = Field(default=2, ge=1, le=3)
+    supplement_budget_seconds: int = Field(default=45, ge=5, le=300)
     verification_attempts: int = Field(default=5, ge=1, le=5)
     verification_interval: float = Field(default=3, ge=0, le=5)
     fault_confirmation_attempts: int = Field(default=3, ge=1, le=5)

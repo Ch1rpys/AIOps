@@ -5,7 +5,7 @@ import httpx
 import pymysql
 import redis
 
-from app.config import Settings
+from app.config import CHECK_IDS, Settings
 from app.scenarios import SCENARIOS
 from app.schemas.domain import Probe, Scenario, Verdict, Verification
 
@@ -85,12 +85,36 @@ class Probes:
             )
 
     def mysql(self) -> list[Probe]:
-        return [
-            self.sql(),
-            self.http(
+        return [self.by_name("mysql_select_1"), self.by_name("app_db_check")]
+
+    def by_name(self, name: str) -> Probe:
+        """按注册的检查 ID 取一次观测。
+
+        注册表是唯一的检查入口：模型只能从这里选要补什么，不能自由发挥。
+        """
+        if name == "mysql_select_1":
+            return self.sql()
+        if name == "app_db_check":
+            return self.http(
                 "app_db_check", self.settings.app_url + "/db-check", {"status": "ok", "value": 1}
-            ),
-        ]
+            )
+        if name == "redis_roundtrip":
+            return self.redis_roundtrip()
+        if name == "app_cache_check":
+            return self.http(
+                "app_cache_check",
+                self.settings.app_url + "/cache-check",
+                {"status": "ok", "value": "probe"},
+            )
+        if name == "nginx_hello":
+            return self.http(
+                "nginx_hello",
+                self.settings.nginx_url + "/api/hello",
+                {"message": "hello from demo-app"},
+            )
+        if name == "app_health":
+            return self.http("app_health", self.settings.app_url + "/health", {"status": "ok"})
+        raise ValueError(f"未注册的检查 ID：{name}")
 
     def redis_roundtrip(self) -> Probe:
         try:
@@ -120,29 +144,11 @@ class Probes:
         if scenario == Scenario.MYSQL_DOWN:
             return self.mysql()
         if scenario == Scenario.REDIS_DOWN:
-            return [
-                self.redis_roundtrip(),
-                self.http(
-                    "app_cache_check",
-                    self.settings.app_url + "/cache-check",
-                    {"status": "ok", "value": "probe"},
-                ),
-            ]
-        return [
-            self.http(
-                "nginx_hello",
-                self.settings.nginx_url + "/api/hello",
-                {"message": "hello from demo-app"},
-            )
-        ]
+            return [self.by_name("redis_roundtrip"), self.by_name("app_cache_check")]
+        return [self.by_name("nginx_hello")]
 
     def baseline(self) -> list[Probe]:
-        return [
-            *self.mysql(),
-            *self.for_scenario(Scenario.REDIS_DOWN),
-            *self.for_scenario(Scenario.NGINX_502),
-            self.http("app_health", self.settings.app_url + "/health", {"status": "ok"}),
-        ]
+        return [self.by_name(name) for name in CHECK_IDS]
 
     def verify(
         self, on_sample: Callable[[list[Probe]], None], scenario: Scenario = Scenario.MYSQL_DOWN

@@ -422,6 +422,24 @@ async function run() {
     },
   );
   await check(
+    "TEST/MOCK candidate root causes and supplement rationale are visible",
+    async () => {
+      await page.goto(`${base}/incidents`);
+      await page.locator(".incidents-table tbody tr").first().waitFor();
+      await page.locator(".incidents-table tbody tr .incident-link").first().click();
+      await page.getByRole("heading", { name: "候选根因与补采" }).waitFor();
+      const card = await page
+        .locator(".proto-card")
+        .filter({ hasText: "候选根因与补采" })
+        .innerText();
+      // 展示的是可核对的结论摘要与证据引用，不是模型的隐藏思考过程。
+      assert.ok(card.includes("新增证据排除了什么"), "against-evidence column must exist");
+      assert.ok(card.includes("仍缺失的检查"), "missing checks column must exist");
+      assert.ok(card.includes("不展示模型隐藏思考过程"), "honesty note must be shown");
+      await noOverflow(page);
+    },
+  );
+  await check(
     "TEST/MOCK evaluation page: arms comparison, hidden truth and honest metrics",
     async () => {
       await page.goto(`${base}/evaluation`);

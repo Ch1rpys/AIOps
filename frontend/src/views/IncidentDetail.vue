@@ -183,6 +183,26 @@ async function copyId() {
   }
 }
 
+// M3：候选根因、请求补采的理由与「新增证据排除了什么」
+const candidates = computed(() => incident.value?.detail.diagnosis?.candidates ?? []);
+const requestedChecks = computed(() => incident.value?.detail.diagnosis?.requested_checks ?? []);
+const collectedSources = computed(() =>
+  (incident.value?.detail.supplement?.collected ?? []).map((item) => item.source ?? ''),
+);
+const hasCandidateDetail = computed(
+  () =>
+    candidates.value.length > 0 ||
+    requestedChecks.value.length > 0 ||
+    !!incident.value?.detail.supplement,
+);
+
+function evidenceSource(id: string): string {
+  const record = incident.value?.records.find(
+    (item) => item.kind === 'evidence' && item.payload.id === id,
+  );
+  return record ? String(record.payload.source ?? id) : id;
+}
+
 // 依据 n 条定位处理 (V1-06)
 function locateCitations() {
   const ids = incident.value?.detail.diagnosis?.evidence_ids ?? [];
@@ -271,7 +291,8 @@ function openDiagnosisDrawer() {
   if (!incident.value?.detail.diagnosis) return;
   drawerMode.value = 'diagnosis';
   drawerTitle.value = 'HolmesGPT 智能诊断详情';
-  drawerSubtitle.value = `置信度 ${(incident.value.detail.diagnosis.confidence * 100).toFixed(0)}% · 来源 HolmesGPT`;
+  // §6.4：模型自报的 confidence 未经校准，不能当成成功概率展示。
+  drawerSubtitle.value = `模型自报置信度 ${(incident.value.detail.diagnosis.confidence * 100).toFixed(0)}%（未经校准） · 来源 HolmesGPT`;
   drawerBadgeText.value = incident.value.detail.diagnosis.evidence_sufficient
     ? '证据充分'
     : '证据不足';
@@ -514,6 +535,73 @@ onUnmounted(() => {
           </div>
         </section>
 
+        <!-- M3：候选根因与受限补采的可核对说明 -->
+        <section v-if="hasCandidateDetail" class="proto-card">
+          <div class="section-heading">
+            <h2>候选根因与补采</h2>
+            <span v-if="incident.detail.supplement_stopped" class="state-badge" data-tone="warning">
+              {{ incident.detail.supplement_stopped }}
+            </span>
+          </div>
+
+          <div v-if="requestedChecks.length" class="filter-bar">
+            <span class="muted text-12">为什么需要这项检查</span>
+            <span v-for="item in requestedChecks" :key="item.check_id" class="text-12">
+              <strong class="mono">{{ item.check_id }}</strong>
+              <span class="muted">{{ item.reason }}</span>
+            </span>
+          </div>
+
+          <div v-if="incident.detail.supplement" class="filter-bar">
+            <span class="muted text-12">补采到的观测</span>
+            <span v-for="(item, index) in collectedSources" :key="index" class="mono text-12">
+              {{ item }}
+            </span>
+          </div>
+
+          <div v-if="candidates.length" class="table-scroll">
+            <table class="probe-table">
+              <thead>
+                <tr>
+                  <th>候选根因</th>
+                  <th>支持证据</th>
+                  <th>新增证据排除了什么</th>
+                  <th>仍缺失的检查</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in candidates" :key="item.root_cause">
+                  <td>
+                    {{ rootCauseName(item.root_cause) }}
+                    <div class="mono muted text-12">{{ item.root_cause }}</div>
+                  </td>
+                  <td>{{ item.support_evidence_ids.length }} 条</td>
+                  <td>
+                    <span v-if="!item.against_evidence_ids.length" class="muted text-12">
+                      暂无
+                    </span>
+                    <span
+                      v-for="againstId in item.against_evidence_ids"
+                      :key="againstId"
+                      class="mono text-12"
+                      style="margin-right: 6px"
+                    >
+                      {{ evidenceSource(againstId) }}
+                    </span>
+                  </td>
+                  <td class="muted text-12">
+                    {{ item.missing_checks.join('、') || '无' }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p class="help-text">
+            只展示可核对的结论摘要与证据引用，不展示模型隐藏思考过程；模型自报置信度未经校准。
+          </p>
+        </section>
+
         <!-- 紧凑证据面板 (V1-07) -->
         <EvidencePanel
           :records="incident.records"
@@ -521,7 +609,6 @@ onUnmounted(() => {
           :highlight-id="highlightedEvidenceId"
           @inspect-evidence="openEvidenceDrawer"
         />
-
         <!-- 底部审计入口 (V1-08) -->
         <div style="margin-top: 12px; text-align: right">
           <button type="button" class="text-button text-12" @click="openAuditDrawer">
@@ -824,7 +911,7 @@ onUnmounted(() => {
           </dd>
           <dt>根因编码</dt>
           <dd class="mono">{{ incident.detail.diagnosis.root_cause }}</dd>
-          <dt>模型置信度</dt>
+          <dt>模型自报置信度（未经校准）</dt>
           <dd>
             <strong>{{ (incident.detail.diagnosis.confidence * 100).toFixed(0) }}%</strong>
             <span class="muted text-12" style="margin-left: 6px"

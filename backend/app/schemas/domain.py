@@ -91,6 +91,38 @@ def required_evidence_ids(evidence: list[Evidence]) -> list[str]:
     return [item.id for item in evidence if item.kind in REQUIRED_EVIDENCE_KINDS]
 
 
+class CandidateRootCause(StrictModel):
+    """候选根因及其支持与反对证据。
+
+    「反对证据」是 M3 的价值所在：新增证据排除了什么，要能核对。
+    """
+
+    root_cause: Literal[
+        "MYSQL_SERVICE_STOPPED",
+        "REDIS_SERVICE_STOPPED",
+        "UPSTREAM_APP_STOPPED",
+        "INSUFFICIENT_EVIDENCE",
+        "OTHER",
+    ]
+    support_evidence_ids: list[str] = Field(default_factory=list, max_length=10)
+    against_evidence_ids: list[str] = Field(default_factory=list, max_length=10)
+    missing_checks: list[str] = Field(default_factory=list, max_length=10)
+
+
+class CheckRequest(StrictModel):
+    """模型请求补采的检查：只能从注册的检查 ID 里选，并说明理由。"""
+
+    check_id: Literal[
+        "mysql_select_1",
+        "app_db_check",
+        "redis_roundtrip",
+        "app_cache_check",
+        "nginx_hello",
+        "app_health",
+    ]
+    reason: str = Field(min_length=1, max_length=500)
+
+
 class Diagnosis(StrictModel):
     root_cause: Literal[
         "MYSQL_SERVICE_STOPPED",
@@ -103,6 +135,9 @@ class Diagnosis(StrictModel):
     evidence_ids: list[str] = Field(min_length=1, max_length=30)
     confidence: float = Field(ge=0, le=1)
     evidence_sufficient: StrictBool
+    # M3 扩展：全部可选且有默认值，现有证据与结论序列化结果不变。
+    candidates: list[CandidateRootCause] = Field(default_factory=list, max_length=5)
+    requested_checks: list[CheckRequest] = Field(default_factory=list, max_length=3)
 
 
 class DomainReview(StrictModel):

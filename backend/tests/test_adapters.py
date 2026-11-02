@@ -22,12 +22,15 @@ def holmes_transport(handler):
 
 
 def test_holmes_decodes_analysis_json_string(settings):
+    # M3 扩展：candidates 与 requested_checks 是可选字段，未返回时取空列表。
     expected = {
         "root_cause": "MYSQL_SERVICE_STOPPED",
         "summary": "TEST/MOCK",
         "evidence_ids": ["ev_test"],
         "confidence": 0.8,
         "evidence_sufficient": True,
+        "candidates": [],
+        "requested_checks": [],
     }
 
     def handler(request):

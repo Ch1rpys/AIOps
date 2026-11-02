@@ -56,6 +56,8 @@ class TestWorld:
         self.blind_root_cause = "MYSQL_SERVICE_STOPPED"
         self.review_verdict = "agree"
         self.review_root_cause = "MYSQL_SERVICE_STOPPED"
+        self.requested_checks: list[list[dict]] = []
+        self.candidates: list[dict] = []
 
     @property
     def stopped(self) -> bool:
@@ -102,6 +104,9 @@ class TestWorld:
     def mysql(self):
         return [self.probe_for(name) for name in ("mysql_select_1", "app_db_check")]
 
+    def by_name(self, name):
+        return self.probe_for(name)
+
     def for_scenario(self, scenario):
         return [self.probe_for(name) for name in self.CHECKS_BY_SCENARIO[scenario]]
 
@@ -122,12 +127,17 @@ class TestWorld:
         self.diagnosis_contexts.append(context)
         if self.diagnosis_error:
             raise self.diagnosis_error
+        requests = []
+        if self.requested_checks:
+            requests = list(self.requested_checks.pop(0))
         return Diagnosis(
             root_cause="MYSQL_SERVICE_STOPPED",
             summary="TEST/MOCK 数据库已停止",
             evidence_ids=[e["id"] for e in context["evidence"]],
             confidence=0.9,
             evidence_sufficient=self.evidence_sufficient,
+            candidates=list(self.candidates),
+            requested_checks=requests,
         )
 
     def plan(self, context):

@@ -2,6 +2,7 @@ import json
 import logging
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import TypedDict
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -14,7 +15,7 @@ from app.agents.evidence import (
     validate_evidence_integrity,
     validate_execution_preconditions,
 )
-from app.config import DomainError
+from app.config import CHECK_IDS, DomainError, Settings
 from app.integrations.models import DiagnosisProvider, PlannerProvider
 from app.integrations.probes import Probes
 from app.repositories.store import Store
@@ -30,6 +31,9 @@ class IncidentState(TypedDict, total=False):
     run_id: str
     attempt: int
     collect_count: int
+    supplement_count: int
+    supplements: list[dict]
+    started_at: str
     evidence: list[dict]
     diagnosis: dict
     plan: dict
@@ -50,10 +54,12 @@ class Workflow:
         executor: ActionExecutor,
         probes: Probes,
         checkpointer: BaseCheckpointSaver,
+        settings: Settings | None = None,
     ) -> None:
         self.store, self.evidence_agent = store, evidence_agent
         self.diagnosis, self.planner = diagnosis, planner
         self.executor, self.probes = executor, probes
+        self.settings = settings or evidence_agent.settings
         builder = StateGraph(IncidentState)
         for name, node in (
             ("collect", self.collect),
@@ -68,7 +74,10 @@ class Workflow:
         builder.add_node("collect_retry", self.collect_retry)
         builder.add_edge("collect_retry", "collect")
         builder.add_conditional_edges("collect", self.after_collect)
-        builder.add_conditional_edges("diagnose", lambda s: END if s.get("error") else "plan")
+        # M3：诊断可以请求补采，补采后回到诊断节点重来一轮。
+        builder.add_node("supplement", self.supplement)
+        builder.add_edge("supplement", "diagnose")
+        builder.add_conditional_edges("diagnose", self.after_diagnose)
         builder.add_conditional_edges("plan", lambda s: END if s.get("error") else "approval")
         builder.add_conditional_edges(
             "approval", lambda s: "execute" if s["decision"] == "approve" else END
@@ -204,6 +213,90 @@ class Workflow:
             return {"diagnosis": result.model_dump(mode="json")}
 
         return self.guarded(state, Status.DIAGNOSING, operation)
+
+    # ---- M3：受限主动补采 ---------------------------------------------------
+
+    def supplement(self, state):
+        """按模型请求补采观测。
+
+        只能补采注册过的检查 ID，且不重复采集已有证据；
+        轮次与总耗时都由配置封顶，超限就不再补采并如实记录原因。
+        """
+
+        def operation():
+            requested = self.pending_requests(state)
+            collected = []
+            for request in requested:
+                probe = self.probes.by_name(request["check_id"])
+                item = Evidence(source=probe.name, kind="probe", raw=probe.model_dump(mode="json"))
+                collected.append(item)
+            with self.store.session() as session, session.begin():
+                for item in collected:
+                    self.store.audit(
+                        session, state["incident_id"], "evidence", item.model_dump(mode="json")
+                    )
+            record = {
+                "round": state.get("supplement_count", 0) + 1,
+                "requested": requested,
+                "collected": [item.model_dump(mode="json") for item in collected],
+                "collected_at": now(),
+            }
+            self.phase(state, Status.COLLECTING, supplement=record)
+            return {
+                "evidence": [
+                    *state["evidence"],
+                    *[item.model_dump(mode="json") for item in collected],
+                ],
+                "collect_count": state.get("collect_count", 0) + 1,
+                "supplement_count": state.get("supplement_count", 0) + 1,
+                "supplements": [*(state.get("supplements") or []), record],
+            }
+
+        return self.guarded(state, Status.COLLECTING, operation)
+
+    def pending_requests(self, state) -> list[dict]:
+        """本轮真正要补采的检查：只认注册 ID，且不采已有证据。"""
+        requested = (state.get("diagnosis") or {}).get("requested_checks") or []
+        collected = {
+            item["source"] for item in state.get("evidence", []) if item.get("kind") == "probe"
+        }
+        pending = []
+        for request in requested:
+            check_id = request.get("check_id")
+            if check_id not in CHECK_IDS or check_id in collected:
+                continue
+            pending.append({"check_id": check_id, "reason": request.get("reason", "")})
+            if len(pending) >= self.settings.supplement_max_checks:
+                break
+        return pending
+
+    def after_diagnose(self, state):
+        if state.get("error"):
+            return END
+        requested = (state.get("diagnosis") or {}).get("requested_checks") or []
+        if not requested:
+            return "plan"
+        rounds = state.get("supplement_count", 0)
+        if rounds >= self.settings.supplement_max_rounds:
+            self.phase(state, Status.DIAGNOSING, supplement_stopped="已达补采轮次上限")
+            return "plan"
+        if self.elapsed_seconds(state) >= self.settings.supplement_budget_seconds:
+            self.phase(state, Status.DIAGNOSING, supplement_stopped="补采耗时预算已用尽")
+            return "plan"
+        if not self.pending_requests(state):
+            self.phase(state, Status.DIAGNOSING, supplement_stopped="请求的检查已全部采集或未注册")
+            return "plan"
+        return "supplement"
+
+    @staticmethod
+    def elapsed_seconds(state) -> float:
+        started = state.get("started_at")
+        if not started:
+            return 0.0
+        try:
+            return (datetime.now(UTC) - datetime.fromisoformat(started)).total_seconds()
+        except ValueError:
+            return 0.0
 
     def plan(self, state):
         def operation():
