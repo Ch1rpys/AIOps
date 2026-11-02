@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-exec .venv/bin/python scripts/acceptance_mysql.py "$@"
+exec .venv/bin/python scripts/run_acceptance.py "$@"

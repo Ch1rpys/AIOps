@@ -94,3 +94,55 @@ export interface Incident extends IncidentSummary {
     verification?: { verdict: Verdict; samples: Probe[][]; captured_at: string };
   };
 }
+
+// ---- 盲诊评测 ---------------------------------------------------------------
+
+export type EvaluationArm = 'A' | 'B' | 'C';
+
+export interface EvaluationRunRow {
+  id: string;
+  arm: EvaluationArm;
+  snapshot_hash: string;
+  root_cause: string | null;
+  evidence_sufficient: boolean | null;
+  summary: string | null;
+  status: string;
+  model_calls: number | null;
+  latency_ms: number | null;
+  token_usage: Record<string, Json> | null;
+  fault_present: number | null;
+  created_at: string;
+  /** 只有显式切到「评测视图」才会返回。 */
+  truth_scenario?: ScenarioKey;
+  correct?: number | null;
+  rejected?: number | null;
+}
+
+export interface EvaluationRunDetail extends EvaluationRunRow {
+  evidence: { items?: Json };
+  diagnosis: Record<string, Json>;
+}
+
+export interface EvaluationArmSummary {
+  arm: EvaluationArm;
+  runs: number;
+  valid_runs: number;
+  correct: number;
+  rejected: number;
+  contradictory: number;
+  invalid_runs: number;
+  budget_exceeded: number;
+  errors: number;
+  contract_violations: number;
+  accuracy: number | null;
+  rejection_rate: number | null;
+  avg_latency_ms: number | null;
+  model_calls_avg: number | null;
+}
+
+export interface EvaluationSummary {
+  arms: EvaluationArmSummary[];
+  /** 纯诊断对照不评估处置提议与拦截率：显示「不适用」，不记 0。 */
+  proposal_metrics_applicable: boolean;
+  notes: string[];
+}

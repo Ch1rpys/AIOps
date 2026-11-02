@@ -86,6 +86,7 @@ DeepSeek 配置采用 `HOLMES_MODEL=deepseek/deepseek-flash`、`PLANNER_MODEL=de
 - `/environment`：四容器实际状态、平台/Docker/Holmes/Planner 自检、当前实验租约及鉴权确认重置；`?tab=probes` 查看基线探针完整返回。Planner 配置就绪不等于真实模型连通，仍如实显示 UNKNOWN。
 - `/incidents/:id`：服务端工单、按轮次保存的节点记录、诊断引用的实际证据、右侧审批、执行回执及全部复测采样。当前环境采样与工单历史分别标记时间。
 - `/incidents`：场景/状态服务端筛选与分页、工单详情和真实 Markdown 报告下载；左侧保留最近六条工单与错误反馈。
+- `/evaluation`：盲诊评测独立页面。只做诊断对照，不产生任何处置提议；默认不显示真值，切换「评测视图」才显示（需管理员令牌）。
 - 概览与比赛评测仍留待后续切片，不提供未完成的占位入口或假统计。
 
 ## 启动
@@ -147,10 +148,25 @@ docker --context default compose --project-name aiops-demo --env-file .env --fil
 
 ```powershell
 ./scripts/run_acceptance.ps1 -Preflight
-./scripts/run_acceptance.ps1
+./scripts/run_acceptance.ps1 -Rounds 3
 ```
 
-脚本输出 PASS/FAIL，退出码成功 0、失败非零。原始 HTTP 响应写入 `data/acceptance/*.json`。基线不健康时停止，不操作其他 Docker 服务。重置只经控制台确认和认证接口；停止演示服务可运行 `./scripts/stop_lab.ps1`，不会删除容器、数据卷或镜像。
+脚本输出 PASS/FAIL，退出码成功 0、失败非零。原始 HTTP 响应写入 `data/acceptance/*.json`，每轮另存 `data/acceptance/<工单>.md`（Markdown 报告）与 `<工单>.diagnosis.json`（模型原始结论）。某一轮失败会保留失败工单并直接失败，不重跑到全绿。基线不健康时停止，不操作其他 Docker 服务。重置只经控制台确认和认证接口；停止演示服务可运行 `./scripts/stop_lab.ps1`，不会删除容器、数据卷或镜像。
+
+### 盲诊评测（M1）
+
+盲诊是**独立链路**：只诊断、不提议处置、不调用规划器，也拿不到执行器入口。运行：
+
+```bash
+./.venv/bin/python scripts/run_evaluation.py --rounds 3
+```
+
+- 3 场景 × 3 轮 = 9 次盲诊；每轮把 A、B 两臂放在**同一份证据快照**上对照，快照指纹相同才可比。
+- 逐条人工复核：先看证据独立判断根因，再揭晓系统判卷；复核结论写进 `data/evaluation/blind-*.md`。
+- 真值只落在 `evaluation_runs.truth_scenario`，接口默认不返回；`GET /api/evaluation/*?view=evaluation` 需要管理员令牌。
+- 评测与工作台共用同一个四容器环境，**互斥**：评测进行中工作台注入会被拒绝，工作台实验进行中评测也会被拒绝。
+- 预算是上限不是配额：模型调用 ≤3 次、总耗时 ≤45 秒（评测专用较短超时保证单次调用不会突破总预算）；超限的实验会被终止并单独记录，不混入正确率分母。
+- 9 次实验是**复现基线**，不构成统计显著性；根因枚举收窄了假设空间，报告里必须显式声明。
 
 ## 离线检查
 

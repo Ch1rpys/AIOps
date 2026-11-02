@@ -1,10 +1,22 @@
 import { adminToken } from '../composables/session';
-import type { Health, Incident, IncidentSummary, Scenario, ScenarioKey, Status } from '../types';
+import type {
+  EvaluationArm,
+  EvaluationRunDetail,
+  EvaluationRunRow,
+  EvaluationSummary,
+  Health,
+  Incident,
+  IncidentSummary,
+  Scenario,
+  ScenarioKey,
+  Status,
+} from '../types';
 
 async function request<T>(path: string, method = 'GET', body?: unknown, key?: string): Promise<T> {
   const headers: Record<string, string> = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
-  if (method !== 'GET' && adminToken.value) headers['X-Admin-Token'] = adminToken.value;
+  // 令牌随请求一起带上：评测视图之类的只读接口也要按管理员权限裁剪返回。
+  if (adminToken.value) headers['X-Admin-Token'] = adminToken.value;
   if (key) headers['Idempotency-Key'] = key;
   try {
     const response = await fetch(`/api${path}`, {
@@ -68,6 +80,25 @@ export const api = {
       'POST',
       { plan_id: planId, decision, comment },
       `${planId}-${decision}`,
+    ),
+  evaluationRuns: (options: { limit?: number; offset?: number; evaluationView?: boolean } = {}) => {
+    const query = new URLSearchParams();
+    if (options.limit !== undefined) query.set('limit', String(options.limit));
+    if (options.offset !== undefined) query.set('offset', String(options.offset));
+    if (options.evaluationView) query.set('view', 'evaluation');
+    return request<EvaluationRunRow[]>(`/evaluation/runs?${query}`);
+  },
+  evaluationSummary: () => request<EvaluationSummary>('/evaluation/summary'),
+  evaluationRun: (id: string, evaluationView = false) =>
+    request<EvaluationRunDetail>(
+      `/evaluation/runs/${encodeURIComponent(id)}${evaluationView ? '?view=evaluation' : ''}`,
+    ),
+  triggerEvaluation: (scenario: ScenarioKey, arms: EvaluationArm[], key: string) =>
+    request<{ accepted: boolean; scenario: string; arms: EvaluationArm[]; status: string }>(
+      '/evaluation/runs',
+      'POST',
+      { scenario, arms, confirm: true },
+      key,
     ),
 };
 

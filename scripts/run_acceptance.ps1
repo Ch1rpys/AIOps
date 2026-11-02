@@ -1,7 +1,10 @@
-param([switch]$Preflight)
+param([switch]$Preflight, [string[]]$Scenario, [int]$Rounds = 1)
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path -Parent $PSScriptRoot)
-$arguments = @('scripts/acceptance_mysql.py')
+$python = if (Test-Path './.venv/Scripts/python.exe') { './.venv/Scripts/python.exe' } else { './.venv/bin/python' }
+$arguments = @('scripts/run_acceptance.py')
 if ($Preflight) { $arguments += '--preflight' }
-& ./.venv/Scripts/python.exe @arguments
+if ($Scenario) { $arguments += '--scenario'; $arguments += $Scenario }
+if ($Rounds -gt 0) { $arguments += '--rounds'; $arguments += $Rounds }
+& $python @arguments
 exit $LASTEXITCODE

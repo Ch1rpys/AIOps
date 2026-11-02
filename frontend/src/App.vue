@@ -15,6 +15,7 @@ const links = [
   { path: '/environment', label: '环境管理', icon: 'env' },
   { path: '/environment?tab=probes', label: '基线探针', icon: 'probe' },
   { path: '/incidents', label: '故障记录与报告', icon: 'archive' },
+  { path: '/evaluation', label: '盲诊评测', icon: 'evaluate' },
 ];
 
 const workbenchPath = computed(() =>
@@ -25,6 +26,7 @@ const breadcrumb = computed(() => {
   if (route.params.id) return '智能诊断工作台';
   if (route.path === '/environment') return route.query.tab === 'probes' ? '基线探针' : '环境管理';
   if (route.path === '/incidents') return '故障记录与报告';
+  if (route.path === '/evaluation') return '盲诊评测';
   return '故障实验';
 });
 
@@ -119,6 +121,18 @@ watch(() => route.fullPath, loadRecent);
             >
               <circle cx="12" cy="12" r="9" />
               <path d="m12 7 2 5-5-2 3-3z" />
+            </svg>
+            <svg
+              v-else-if="link.icon === 'evaluate'"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path d="M3 3v18h18" />
+              <path d="m7 15 3-4 3 3 5-7" />
             </svg>
             <svg
               v-else
