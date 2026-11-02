@@ -526,6 +526,18 @@ async function run() {
       await page.getByText("视觉证据截图", { exact: false }).first().waitFor();
       await page.getByRole("button", { name: "触发实验" }).click();
       await page.getByText("C 臂需要先上传截图", { exact: false }).waitFor();
+      // 上传截图后 C 臂可以触发：识别结果与就绪状态必须如实显示。
+      await page.locator('input[type="file"]').setInputFiles({
+        name: "error-page.png",
+        mimeType: "image/png",
+        buffer: Buffer.from(
+          "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c6360000002000100ffff03000006000557bfabd40000000049454e44ae426082",
+          "hex",
+        ),
+      });
+      await page.getByText("截图已就绪", { exact: false }).first().waitFor();
+      await page.getByRole("button", { name: "触发实验" }).click();
+      await page.getByText("实验已触发", { exact: false }).waitFor();
       // 取消 C：多选框里再点一次是取消选中。
       await page.getByText("C · 增加视觉证据", { exact: false }).first().click();
       // 切到评测视图后才显示真值。
