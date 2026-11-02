@@ -811,7 +811,9 @@ onUnmounted(() => {
             <span class="muted text-12">未解决项</span>
             <span v-for="item in review.unresolved" :key="item" class="text-12">{{ item }}</span>
           </div>
-          <p class="help-text">摘要只投影已保存的工单记录，不重新执行任何容器动作。</p>
+          <p class="help-text">
+            这是历史回放，不是现场运行：只投影已保存的工单记录，不重新执行任何容器动作。
+          </p>
         </section>
 
         <!-- M3：候选根因与受限补采的可核对说明 -->

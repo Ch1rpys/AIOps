@@ -81,8 +81,8 @@ async function load() {
     summary.value = totals;
   } catch (cause) {
     if (requestedVersion === version && !disposed) {
+      // 汇总不需要令牌，列表失败（例如评测视图缺令牌）时不要把汇总一起清掉。
       runs.value = [];
-      summary.value = null;
       error.value = errorMessage(cause);
     }
   } finally {

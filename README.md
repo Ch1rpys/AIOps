@@ -204,7 +204,7 @@ $env:PYTHONPATH = (Join-Path (Get-Location) 'backend')
 
 ## API 示例
 
-所有写操作需要 `X-Admin-Token`，注入、审批、重置还需要 `Idempotency-Key`（8–120 位字母、数字、横线或下划线）。幂等键重用于不同请求返回 409。同一实验独占环境；取消、失败或未知时保留实验锁，防止叠加新故障。
+所有写操作需要 `X-Admin-Token`，注入、审批、重置、评测触发还需要 `Idempotency-Key`（8–120 位字母、数字、横线或下划线）。幂等键重用于不同请求返回 409。同一实验独占环境；取消、失败或未知时保留实验锁，防止叠加新故障。盲诊评测使用独立的评测租约，与工作台实验锁互斥：评测进行中注入与重置会被拒绝，工作台实验进行中评测也会被拒绝。
 
 ```http
 POST /api/scenarios/MYSQL_DOWN/inject
@@ -228,7 +228,7 @@ Content-Type: application/json
 
 ## 代码和数据边界
 
-`backend/app/api` 负责路由；`schemas` 负责 DTO；`services` 负责事务、互斥和受控执行；`repositories` 保存工单、请求回执、实验租约及按类别存储的审计记录；`agents` 采证和证据校验；`graph` 是主状态机；`integrations` 实现 Docker、Holmes、Planner 与探针。SQLite schema 初版为 `user_version=1`，增量升级需显式迁移。
+`backend/app/api` 负责路由；`schemas` 负责 DTO；`services` 负责事务、互斥和受控执行；`repositories` 保存工单、请求回执、实验租约、评测记录及按类别存储的审计记录；`agents` 采证和证据校验；`graph` 是主状态机；`integrations` 实现 Docker、Holmes、Planner、视觉模型与探针。SQLite schema 当前为 `user_version=2`（v1 → v2 新增评测表），增量升级走显式迁移分支，版本号只升不降；旧二进制读到未知版本会直接拒绝启动。
 
 只允许一个后端 worker；数据目录文件锁会阻止第二实例。控制器使用参数数组与固定本地 context；不传 Shell、任意 SQL、路径、主机名或模型生成参数。Holmes 不挂载 Docker Socket、宿主机凭据或源代码；运行时发现启用任何工具会阻断诊断。日志及证据对已配置凭据脱敏。
 

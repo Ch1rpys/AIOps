@@ -164,7 +164,7 @@ def render_review_markdown(review: dict) -> str:
         f"发生时间：{review.get('occurred_at')} "
         f"| 结束时间：{review.get('finished_at') or '未结束'}",
         "",
-        "> 本文由工单已保存的记录生成，不重新执行任何容器动作。",
+        "> 这是历史回放，不是现场运行：本文由工单已保存的记录生成，不重新执行任何容器动作。",
         "",
         "## 根因与引用",
         "",
