@@ -422,6 +422,36 @@ async function run() {
     },
   );
   await check(
+    "TEST/MOCK impact graph and review summary distinguish relation kinds",
+    async () => {
+      await page.goto(`${base}/incidents`);
+      await page.locator(".incidents-table tbody tr").first().waitFor();
+      await page.locator(".incidents-table tbody tr .incident-link").first().click();
+      await page.getByRole("heading", { name: "服务影响图" }).waitFor();
+      const graph = await page
+        .locator(".proto-card")
+        .filter({ hasText: "服务影响图" })
+        .innerText();
+      // 三类关系必须分开标注，不能混为一谈。
+      assert.ok(graph.includes("配置依赖"), "configured relation must be labelled");
+      assert.ok(graph.includes("推断传播"), "inferred relation must be labelled");
+      assert.ok(graph.includes("已观测异常"), "observed anomaly must be labelled");
+      assert.ok(graph.includes("受影响接口"), "impacted interfaces must be listed");
+      await page.getByRole("heading", { name: "复盘摘要" }).waitFor();
+      const review = await page
+        .locator(".proto-card")
+        .filter({ hasText: "复盘摘要" })
+        .innerText();
+      assert.ok(review.includes("批准动作"), "approved action must be listed");
+      assert.ok(review.includes("修复前后探针"), "probes before/after must be listed");
+      assert.ok(
+        review.includes("不重新执行任何容器动作"),
+        "review must state it is a projection of saved records",
+      );
+      await noOverflow(page);
+    },
+  );
+  await check(
     "TEST/MOCK candidate root causes and supplement rationale are visible",
     async () => {
       await page.goto(`${base}/incidents`);

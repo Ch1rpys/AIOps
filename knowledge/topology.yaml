@@ -1,0 +1,78 @@
+# 显式业务拓扑：影响图与通用 Runbook 都从这里生成，避免两处各写一份、互相漂移。
+#
+# 三类关系必须分开写清楚：
+#   startup_after  —— 配置依赖：容器启动顺序（来自 compose 的 depends_on）。
+#                     启动顺序不等于业务因果，不能直接画成故障传播链。
+#   business_depends_on —— 真实业务依赖：服务在业务上确实需要对方才能工作。
+#   accessed_by    —— 谁从外部访问这个服务（入口与被访问关系）。
+#
+# 反例（现状就是这个反例）：demo-app 的 /api/hello 与 /health 不访问数据库或缓存，
+# 因此 demo-mysql 故障时这两个接口依然成功；把 depends_on 画成业务因果会得出错误结论。
+version: 1
+
+services:
+  - id: demo-mysql
+    role: 关系型数据库，保存业务数据
+    startup_after: []
+    business_depends_on: []
+    accessed_by: [demo-app]
+    probes: [mysql_select_1, app_db_check]
+    endpoints: []
+
+  - id: demo-redis
+    role: 内存缓存，保存会话与热点数据
+    startup_after: []
+    business_depends_on: []
+    accessed_by: [demo-app]
+    probes: [redis_roundtrip, app_cache_check]
+    endpoints: []
+
+  - id: demo-app
+    role: 业务应用
+    startup_after: [demo-mysql, demo-redis]
+    business_depends_on: [demo-mysql, demo-redis]
+    accessed_by: [demo-nginx]
+    probes: [app_health]
+    endpoints: [/api/hello, /db-check, /cache-check, /health]
+
+  - id: demo-nginx
+    role: 反向代理入口，把外部请求转发给业务应用
+    startup_after: [demo-app]
+    business_depends_on: [demo-app]
+    accessed_by: []
+    probes: [nginx_hello]
+    endpoints: [/api/hello]
+
+# 对外接口：谁提供、依赖谁。影响接口由这里判断，而不是由启动顺序推断。
+interfaces:
+  - path: /api/hello
+    served_by: demo-nginx
+    depends_on: [demo-app]
+    note: 经代理访问；上游不可用时代理返回 502
+  - path: /db-check
+    served_by: demo-app
+    depends_on: [demo-mysql]
+    note: 业务接口直连数据库，数据库不可用时返回 503
+  - path: /cache-check
+    served_by: demo-app
+    depends_on: [demo-redis]
+    note: 业务接口直连缓存，缓存不可用时返回 503
+  - path: /health
+    served_by: demo-app
+    depends_on: []
+    note: 只反映应用进程自身，不访问数据库或缓存
+
+# 业务传播边：影响图里「推断传播」用的就是这些边。
+relations:
+  - from: demo-app
+    to: demo-mysql
+    interface: /db-check
+    note: 业务接口的持久化读写
+  - from: demo-app
+    to: demo-redis
+    interface: /cache-check
+    note: 业务接口的缓存读写
+  - from: demo-nginx
+    to: demo-app
+    interface: /api/hello
+    note: 代理把请求转发给上游应用

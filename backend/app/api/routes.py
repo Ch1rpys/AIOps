@@ -16,6 +16,7 @@ from app.schemas.domain import (
     Scenario,
     Status,
 )
+from app.services.review import build_review, incident_impact_graph, render_review_markdown
 
 router = APIRouter(prefix="/api")
 logger = logging.getLogger("aiops.api")
@@ -143,6 +144,27 @@ def verification(incident_id: str, service=Depends(platform)):
 @router.get("/incidents/{incident_id}/report")
 def report(incident_id: str, service=Depends(platform)):
     return service.store.view(incident_id)
+
+
+@router.get("/incidents/{incident_id}/impact")
+def impact_graph(incident_id: str, service=Depends(platform)):
+    """服务影响图：从工单已保存的证据生成，区分三类关系。"""
+    return incident_impact_graph(service.store.view(incident_id))
+
+
+@router.get("/incidents/{incident_id}/review")
+def review(incident_id: str, service=Depends(platform)):
+    """复盘摘要：只投影持久化记录，不现场重算。"""
+    return build_review(service.store.view(incident_id))
+
+
+@router.get("/incidents/{incident_id}/review.md", response_class=PlainTextResponse)
+def review_markdown(incident_id: str, service=Depends(platform)):
+    content = render_review_markdown(build_review(service.store.view(incident_id)))
+    return PlainTextResponse(
+        content,
+        headers={"Content-Disposition": f'attachment; filename="{incident_id}-review.md"'},
+    )
 
 
 @router.get("/incidents/{incident_id}/report.md", response_class=PlainTextResponse)

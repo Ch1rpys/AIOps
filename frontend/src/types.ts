@@ -123,6 +123,68 @@ export interface Incident extends IncidentSummary {
   };
 }
 
+// ---- 影响图与复盘摘要 -------------------------------------------------------
+
+export interface ImpactNode {
+  id: string;
+  role: string;
+  state: string;
+  observed_anomaly: boolean;
+  observation_unknown: boolean;
+  is_root_cause?: boolean;
+  probes: Probe[];
+  endpoints: string[];
+}
+export interface ImpactEdge {
+  from: string;
+  to: string;
+  kind: 'configured' | 'inferred';
+  note: string;
+  interface?: string;
+  observed: boolean;
+  inferred: boolean;
+}
+export interface ImpactInterface {
+  path: string;
+  served_by: string;
+  depends_on: string[];
+  note: string;
+  impacted: boolean;
+  blocked_by: string[];
+  evidence: string;
+}
+export interface ImpactGraph {
+  nodes: ImpactNode[];
+  edges: ImpactEdge[];
+  interfaces: ImpactInterface[];
+  root_cause: string | null;
+  legend: Record<string, string>;
+  source: string;
+}
+export interface IncidentReview {
+  incident_id: string;
+  scenario: ScenarioKey;
+  mode: string;
+  status: Status;
+  occurred_at: string;
+  finished_at: string | null;
+  root_cause: string | null;
+  root_cause_summary: string | null;
+  root_cause_evidence_ids: string[];
+  affected_interfaces: ImpactInterface[];
+  approved_action: {
+    plan: Plan | null;
+    approval: Record<string, Json> | null;
+    execution: Record<string, Json> | null;
+  };
+  probes_before: Probe[];
+  probes_after: Probe[];
+  unresolved: string[];
+  impact_graph: ImpactGraph;
+  audit_appendix: { id: string; kind: string; created_at: string }[];
+  source: string;
+}
+
 // ---- 盲诊评测 ---------------------------------------------------------------
 
 export type EvaluationArm = 'A' | 'B' | 'C';

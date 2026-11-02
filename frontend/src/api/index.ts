@@ -1,6 +1,8 @@
 import { adminToken } from '../composables/session';
 import type {
   EvaluationArm,
+  ImpactGraph,
+  IncidentReview,
   EvaluationRunDetail,
   EvaluationRunRow,
   EvaluationSummary,
@@ -81,6 +83,10 @@ export const api = {
       { plan_id: planId, decision, comment },
       `${planId}-${decision}`,
     ),
+  incidentImpact: (id: string) =>
+    request<ImpactGraph>(`/incidents/${encodeURIComponent(id)}/impact`),
+  incidentReview: (id: string) =>
+    request<IncidentReview>(`/incidents/${encodeURIComponent(id)}/review`),
   evaluationRuns: (options: { limit?: number; offset?: number; evaluationView?: boolean } = {}) => {
     const query = new URLSearchParams();
     if (options.limit !== undefined) query.set('limit', String(options.limit));

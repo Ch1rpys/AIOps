@@ -35,11 +35,13 @@ import EvidencePanel from '../components/EvidencePanel.vue';
 import WorkflowTrace from '../components/WorkflowTrace.vue';
 import VerificationPanel from '../components/VerificationPanel.vue';
 import DetailDrawer from '../components/DetailDrawer.vue';
-import type { AuditRecord, Incident, Json, Probe } from '../types';
+import type { AuditRecord, ImpactGraph, Incident, IncidentReview, Json, Probe } from '../types';
 
 const route = useRoute();
 const id = computed(() => String(route.params.id));
 const incident = ref<Incident | null>(null);
+const impact = ref<ImpactGraph | null>(null);
+const review = ref<IncidentReview | null>(null);
 const { health, error: environmentError } = useEnvironment();
 
 const fetchError = ref('');
@@ -116,6 +118,20 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 let disposed = false;
 let version = 0;
 
+async function loadAnalysis(requestedId: string, requestedVersion: number) {
+  try {
+    const [graph, summary] = await Promise.all([
+      api.incidentImpact(requestedId),
+      api.incidentReview(requestedId),
+    ]);
+    if (requestedId !== id.value || requestedVersion !== version || disposed) return;
+    impact.value = graph;
+    review.value = summary;
+  } catch {
+    // 影响图与复盘摘要缺失不影响主流程。
+  }
+}
+
 async function load() {
   clearTimeout(timer);
   const requestedId = id.value;
@@ -127,6 +143,10 @@ async function load() {
     incident.value = result;
     updateRecent(result);
     fetchError.value = '';
+    // 影响图与复盘摘要只在终态或首次加载时刷新，避免运行中反复轮询。
+    if (terminalStatuses.includes(result.status) || !impact.value) {
+      loadAnalysis(requestedId, requestedVersion);
+    }
   } catch (cause) {
     if (requestedVersion === version && !disposed) fetchError.value = errorMessage(cause);
   } finally {
@@ -533,6 +553,127 @@ onUnmounted(() => {
               开始智能诊断
             </ElButton>
           </div>
+        </section>
+
+        <!-- M4：服务影响图与复盘摘要 -->
+        <section v-if="impact" class="proto-card">
+          <div class="section-heading">
+            <h2>服务影响图</h2>
+            <span class="muted text-12">三类关系分开标注，不混为一谈</span>
+          </div>
+
+          <div class="filter-bar">
+            <span class="muted text-12">已观测异常</span>
+            <span
+              v-for="node in impact.nodes.filter((item) => item.observed_anomaly)"
+              :key="node.id"
+              class="state-badge"
+              data-tone="danger"
+            >
+              {{ node.id }} · {{ node.state }}
+            </span>
+            <span v-if="!impact.nodes.some((item) => item.observed_anomaly)" class="muted text-12">
+              暂无
+            </span>
+          </div>
+
+          <div class="table-scroll">
+            <table class="probe-table">
+              <thead>
+                <tr>
+                  <th>关系</th>
+                  <th>类型</th>
+                  <th>说明</th>
+                  <th>实测支撑</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(edge, index) in impact.edges" :key="`${edge.from}-${edge.to}-${index}`">
+                  <td class="mono">{{ edge.from }} → {{ edge.to }}</td>
+                  <td>
+                    <span
+                      class="state-badge"
+                      :data-tone="edge.kind === 'inferred' ? 'warning' : 'neutral'"
+                    >
+                      {{ edge.kind === 'inferred' ? '推断传播' : '配置依赖' }}
+                    </span>
+                  </td>
+                  <td class="muted text-12">{{ edge.note || '—' }}</td>
+                  <td>
+                    <span v-if="edge.observed" class="state-badge" data-tone="danger">
+                      有实测支撑
+                    </span>
+                    <span v-else class="muted text-12">无</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="filter-bar" style="margin-top: 10px">
+            <span class="muted text-12">受影响接口</span>
+            <span
+              v-for="item in impact.interfaces"
+              :key="item.path"
+              class="state-badge"
+              :data-tone="item.impacted ? 'danger' : 'neutral'"
+            >
+              {{ item.path }}{{ item.impacted ? ' · 受影响' : ' · 未观测到异常' }}
+            </span>
+          </div>
+          <p class="help-text">
+            启动顺序只标注为「配置依赖」，不等同于业务因果；业务传播沿显式拓扑推断。
+          </p>
+        </section>
+
+        <section v-if="review" class="proto-card">
+          <div class="section-heading">
+            <h2>复盘摘要</h2>
+            <a
+              :href="`/api/incidents/${encodeURIComponent(String(incident?.id ?? ''))}/review.md`"
+              download
+              class="text-link text-12"
+            >
+              Markdown ↓
+            </a>
+          </div>
+
+          <div class="filter-bar">
+            <span class="muted text-12">发生时间</span>
+            <span class="text-12">{{ timeLabel(review.occurred_at) }}</span>
+            <span class="muted text-12">根因</span>
+            <span class="text-12">{{ review.root_cause ?? '无有效诊断' }}</span>
+            <span class="muted text-12">引用证据</span>
+            <span class="text-12">{{ review.root_cause_evidence_ids.length }} 条</span>
+          </div>
+
+          <div class="filter-bar">
+            <span class="muted text-12">批准动作</span>
+            <span class="text-12">
+              {{
+                review.approved_action.plan
+                  ? `${review.approved_action.plan.action_id} → ${review.approved_action.plan.target}`
+                  : '无'
+              }}
+              <span v-if="review.approved_action.approval" class="muted">
+                （{{ review.approved_action.approval.decision }}）
+              </span>
+            </span>
+          </div>
+
+          <div class="filter-bar">
+            <span class="muted text-12">修复前后探针</span>
+            <span class="text-12">
+              修复前 {{ review.probes_before.length }} 条 · 修复后
+              {{ review.probes_after.length }} 条
+            </span>
+          </div>
+
+          <div v-if="review.unresolved.length" class="filter-bar">
+            <span class="muted text-12">未解决项</span>
+            <span v-for="item in review.unresolved" :key="item" class="text-12">{{ item }}</span>
+          </div>
+          <p class="help-text">摘要只投影已保存的工单记录，不重新执行任何容器动作。</p>
         </section>
 
         <!-- M3：候选根因与受限补采的可核对说明 -->
