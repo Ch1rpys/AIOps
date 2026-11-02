@@ -241,3 +241,24 @@ def test_review_failure_keeps_the_first_conclusion(client, world):
     # A 臂没有受影响：同一个快照上 A 仍然可评分。
     assert arm_a["errors"] == 0
     assert arm_a["valid_runs"] == 1
+
+
+def test_failed_experiment_is_recorded_not_dropped(client, world):
+    """实验失败也要留下记录：不能因为失败就看不到这次尝试。"""
+    world.stop_has_no_effect = True  # 注入了，但故障没出现 → 故障无法确认
+    trigger(client)
+    # 失败也必须把实验环境恢复健康，不能把停掉的容器留在那里。
+    assert ("demo-mysql", "stop") in world.operations
+    assert ("demo-mysql", "start") in world.operations
+    rows = runs(client)
+    assert len(rows) == 2
+    for row in rows:
+        assert row["status"] == "ERROR"
+        assert row["fault_present"] is None
+    detail = client.get(f"/api/evaluation/runs/{rows[0]['id']}").json()
+    assert detail["diagnosis"]["code"]
+    summary = client.get("/api/evaluation/summary").json()
+    arm = next(item for item in summary["arms"] if item["arm"] == "A")
+    assert arm["errors"] >= 1
+    assert arm["valid_runs"] == 0
+    assert arm["accuracy"] is None

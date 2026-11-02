@@ -93,8 +93,52 @@ class EvaluationService:
             self.store.acquire_evaluation_lease(holder)
             try:
                 return self._experiment(scenario, arms)
+            except DomainError as error:
+                # 失败也要落库：不能因为实验失败就看不到这次尝试（§9.3）。
+                self._record_failure(scenario, arms, error)
+                raise
             finally:
                 self.store.release_evaluation_lease(holder)
+
+    def _record_failure(self, scenario: Scenario, arms: list[str], error: DomainError) -> None:
+        """实验在中途失败：每个请求的臂各留一条失败记录。"""
+        fingerprint = hashlib.sha256(f"failed:{scenario.value}:{error.code}".encode()).hexdigest()
+        for arm in arms:
+            run = EvaluationRun(
+                id=new_id("evalrun"),
+                arm=arm,
+                truth_scenario=scenario.value,
+                snapshot_hash=fingerprint,
+                evidence_json={},
+                diagnosis_json={
+                    "status": "ERROR",
+                    "code": error.code,
+                    "message": error.message,
+                    "model_calls": 0,
+                    "extra_collects": 0,
+                    "timing": {"total_ms": 0},
+                },
+                correct=None,
+                rejected=0,
+                # 故障是否成立尚未确认：不能写 0（那表示「确认过但不成立」）。
+                fault_present=None,
+                model_calls=0,
+                latency_ms=0,
+                token_usage=None,
+                created_at=now(),
+            )
+            self.store.save_evaluation_run(
+                run,
+                EvaluationArm(
+                    id=new_id("evalarm"),
+                    snapshot_hash=fingerprint,
+                    model=self.settings.holmes_model or "service_default",
+                    prompt_version=PROMPT_VERSION,
+                    max_tokens=None,
+                    timeout_s=self.settings.evaluation_model_timeout,
+                    arm=arm,
+                ),
+            )
 
     def busy(self) -> bool:
         return self.store.evaluation_busy()
@@ -105,15 +149,23 @@ class EvaluationService:
         baseline = lab_baseline(self.docker, self.probes)
         if not baseline["healthy"]:
             raise DomainError("BASELINE_UNHEALTHY", "四个 demo 服务与探针未全部通过，禁止评测", 409)
-        container_started = time.monotonic()
-        self.docker.change(SCENARIOS[scenario].target, "stop")
-        container_ms = round((time.monotonic() - container_started) * 1000)
-
-        snapshot, extra_collects, collect_ms = self._capture_snapshot(scenario)
+        stopped = False
+        restored = False
+        container_ms = collect_ms = restore_ms = 0
+        try:
+            container_started = time.monotonic()
+            self.docker.change(SCENARIOS[scenario].target, "stop")
+            stopped = True
+            container_ms = round((time.monotonic() - container_started) * 1000)
+            snapshot, extra_collects, collect_ms = self._capture_snapshot(scenario)
+        finally:
+            # 无论实验成功还是中途失败，都要把实验环境恢复健康，
+            # 不能把停掉的容器留在那里让工作台无法使用。
+            if stopped:
+                restored, restore_ms = self._restore(scenario)
+                if not restored:
+                    logger.error("evaluation_lab_not_restored scenario=%s", scenario.value)
         fingerprint = self._fingerprint(snapshot)
-        restored, restore_ms = self._restore(scenario)
-        if not restored:
-            logger.error("evaluation_lab_not_restored fingerprint=%s", fingerprint)
 
         rows = []
         for arm in arms:

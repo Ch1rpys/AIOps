@@ -63,6 +63,8 @@ class TestWorld:
         self.candidates: list[dict] = []
         self.window_enabled = False
         self.window_instability = False
+        # 停止操作不生效：用来模拟「注入了但故障没出现」。
+        self.stop_has_no_effect = False
         self.vision_observation = VisionObservation()
 
     @property
@@ -87,7 +89,8 @@ class TestWorld:
     def change(self, service, operation):
         self.operations.append((service, operation))
         if operation == "stop":
-            self.stopped_service = service
+            if not self.stop_has_no_effect:
+                self.stopped_service = service
         elif self.stopped_service == service:
             self.stopped_service = None
         return {"exit_code": 0, "service": service, "operation": operation, "mode": "TEST/MOCK"}
