@@ -106,6 +106,24 @@ class EvaluationLease(Base):
 # 评测租约的最长持有时间：超过即视为进程崩溃留下的陈旧租约。
 EVALUATION_LEASE_TTL_SECONDS = 900
 
+
+def token_total_of(usage: dict) -> int:
+    """一条 usage 记录里的 token 总量。
+
+    标准 usage 同时给 prompt_tokens / completion_tokens / total_tokens，
+    三个数相加会翻倍。有 total_tokens 就用它；
+    没有就用 prompt + completion；都没有才算 0。
+    """
+    total = usage.get("total_tokens")
+    if isinstance(total, int):
+        return total
+    parts = [
+        usage.get(key)
+        for key in ("prompt_tokens", "input_tokens", "completion_tokens", "output_tokens")
+    ]
+    return sum(value for value in parts if isinstance(value, int))
+
+
 SCHEMA_VERSION = 2
 SUPPORTED_SCHEMA_VERSIONS = {0, 1, 2}
 
@@ -461,9 +479,7 @@ class Store:
                     bucket["token_usage_partial"] += 1
                 else:
                     bucket["token_usage_known"] += 1
-                    bucket["token_usage_total"] += sum(
-                        value for value in usage.values() if isinstance(value, int)
-                    )
+                    bucket["token_usage_total"] += token_total_of(usage)
             bucket["contract_violations"] += len(diagnosis.get("contract_violations", []) or [])
             if item.latency_ms is not None:
                 bucket["latency_total_ms"] += item.latency_ms

@@ -76,6 +76,12 @@ function excludedText(arm: EvaluationArmSummary): string {
   return parts.join('、');
 }
 
+function denominatorNote(arm: EvaluationArmSummary): string {
+  // 契约违约按「自信地答错」计入分母（§9.1），也要说明白。
+  if (!arm.contract_violations) return '';
+  return `${arm.contract_violations} 次契约违约按答错计入分母`;
+}
+
 function truthCell(row: EvaluationRunRow): string {
   if (!evaluationView.value) return '不显示';
   if (row.truth_scenario) return scenarioName(row.truth_scenario);
@@ -284,6 +290,9 @@ onUnmounted(() => {
               {{ arm.valid_runs }} / {{ arm.runs }}
               <div v-if="excludedText(arm)" class="muted text-12">
                 （{{ excludedText(arm) }}，已剔除）
+              </div>
+              <div v-if="denominatorNote(arm)" class="muted text-12">
+                （{{ denominatorNote(arm) }}）
               </div>
             </td>
             <td>{{ percent(arm.accuracy) }}</td>

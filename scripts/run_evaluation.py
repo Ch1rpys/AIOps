@@ -64,6 +64,15 @@ def summarize_evidence(detail: dict) -> str:
                 + (f" · {detail_text}" if detail_text else "")
             )
     for item in items:
+        if item.get("kind") == "attachment":
+            # C 臂的视觉证据也要给复核者看：否则复核者掌握的信息比模型少。
+            raw = item.get("raw") or {}
+            observed = raw.get("observed_at") or "时间未知"
+            anomalies = raw.get("anomalies") or []
+            lines.append(f"截图观测（{observed}）：{raw.get('extracted_text', '')[:120]}")
+            for anomaly in anomalies[:3]:
+                lines.append(f"截图异常：{anomaly.get('description', '')[:120]}")
+            continue
         if item.get("kind") != "logs":
             continue
         text = str((item.get("raw") or {}).get("text", ""))
@@ -72,6 +81,13 @@ def summarize_evidence(detail: dict) -> str:
             lines.append(f"日志 {item.get('source')} 尾部：{tail[-1][:160]}")
     lines.append(f"证据条数：{len(items)}")
     return "\n".join(lines)
+
+
+def ms_or_unknown(value) -> str:
+    """耗时未知就写「未知」，不写 None（§9.3）。"""
+    if value is None:
+        return "未知"
+    return f"{value} ms"
 
 
 def render_markdown(transcript: dict, summary: dict | None = None) -> str:
@@ -139,10 +155,10 @@ def render_markdown(transcript: dict, summary: dict | None = None) -> str:
         lines.append(
             "| {arm} | {model} | {collect} | {container} | {restore} | {approval} |".format(
                 arm=arm.get("arm"),
-                model=split.get("model_ms"),
-                collect=split.get("collect_ms"),
-                container=split.get("container_ms"),
-                restore=split.get("restore_ms"),
+                model=ms_or_unknown(split.get("model_ms")),
+                collect=ms_or_unknown(split.get("collect_ms")),
+                container=ms_or_unknown(split.get("container_ms")),
+                restore=ms_or_unknown(split.get("restore_ms")),
                 approval="不适用",
             )
         )

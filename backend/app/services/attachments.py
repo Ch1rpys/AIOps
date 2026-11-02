@@ -70,9 +70,11 @@ class AttachmentService:
         digest = hashlib.sha256(content).hexdigest()
         self.folder.mkdir(parents=True, exist_ok=True)
         path = self.folder / f"{digest}.{ALLOWED_MIME[mime]}"
-        if not path.exists():
+        created = not path.exists()
+        if created:
             path.write_bytes(content)
         return {
+            "created": created,
             "id": f"att_{digest}",
             "filename": safe_filename(filename),
             "mime": mime,
@@ -123,9 +125,12 @@ class AttachmentService:
         return parsed if isinstance(parsed, dict) else None
 
     def discard(self, attachment: dict) -> None:
-        """删除没有被任何工单引用的附件文件（分析失败时的孤儿文件）。"""
+        """删除没有被任何工单引用的附件文件（分析失败时的孤儿文件）。
+
+        只删本次新建的文件：同一张图被别的工单引用过时不能连坐删除。
+        """
         storage = attachment.get("storage")
-        if not storage:
+        if not storage or not attachment.get("created"):
             return
         path = self.settings.data_dir / storage
         try:
@@ -134,8 +139,10 @@ class AttachmentService:
             logger.warning("attachment_discard_failed storage=%s", storage)
 
     def analyze(self, attachment: dict, note: str = "") -> dict:
-        """调用视觉模型提取观测；结果同时落盘，供评测链路读取。"""
-        """调用视觉模型提取观测，并补齐「时间未知」等显式标注。"""
+        """调用视觉模型提取观测，并补齐「时间未知」等显式标注。
+
+        结果同时落盘，供评测链路的后台任务读取。
+        """
         path = self.settings.data_dir / attachment["storage"]
         content = path.read_bytes()
         mime = attachment["mime"]

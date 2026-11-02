@@ -209,14 +209,11 @@ class EvaluationService:
                     restored, restore_ms = self._restore(scenario)
                 except DomainError as error:
                     # 恢复失败不能顶掉原始错误：原始错误才是这次实验的根因。
-                    logger.error(
-                        "evaluation_restore_failed scenario=%s code=%s",
-                        scenario.value,
-                        error.code,
-                    )
+                    # 不打印场景：真值不进日志（§4.1）。
+                    logger.error("evaluation_restore_failed code=%s", error.code)
                     restored = False
                 if not restored:
-                    logger.error("evaluation_lab_not_restored scenario=%s", scenario.value)
+                    logger.error("evaluation_lab_not_restored")
         fingerprint = self._fingerprint(snapshot)
 
         rows = []
@@ -427,6 +424,8 @@ class EvaluationService:
             "model_calls": budget.calls,
             "model_ms": trace.latency_ms,
             "usage": trace.usage,
+            # 模型原始输出也留档：审计要的是模型真的说了什么（§9.3）。
+            "raw_model_output": trace.raw.get("analysis"),
             "contract_violations": self._violations(diagnosis, snapshot),
         }
 
@@ -538,6 +537,10 @@ class EvaluationService:
             "model_ms": first_trace.latency_ms + review_trace.latency_ms,
             "usage": merged_usage,
             "usage_partial": usage_partial,
+            "raw_model_output": {
+                "first": first_trace.raw.get("analysis"),
+                "review": review_trace.raw.get("analysis"),
+            },
             "contract_violations": [
                 *self._violations(first, snapshot),
                 *self._violations(review, snapshot),

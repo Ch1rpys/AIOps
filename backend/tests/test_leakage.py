@@ -240,3 +240,64 @@ def test_blind_payload_cites_every_required_evidence_id(tmp_path, world):
     for item in evidence:
         if item.kind in {"container_state", "probe"}:
             assert item.id in prompt
+
+
+@pytest.mark.parametrize("mode", ["json_schema", "json_object"])
+def test_attachment_payload_has_no_scenario_markers(tmp_path, world, mode):
+    """C 臂的截图证据同样受泄漏约束：最终序列化载荷里不能有场景标识与答案标签。
+
+    文件名是用户可控文本，截图 OCR 出来的文字是外部数据，
+    两者都不能被当成「答案」或「指令」放进模型上下文（§4.3 / §5.2）。
+    """
+    settings = blind_settings(tmp_path, mode)
+    evidence = EvidenceAgent(settings, world, world).collect_domain()
+    ids = [item.id for item in evidence]
+    recorder = Recorder(
+        {
+            "root_cause": "MYSQL_SERVICE_STOPPED",
+            "summary": "TEST/MOCK",
+            "evidence_ids": ids,
+            "confidence": 0.9,
+            "evidence_sufficient": True,
+        }
+    )
+    client = httpx.Client(transport=httpx.MockTransport(recorder.handler))
+    provider = HolmesDiagnosisProvider(settings, client)
+    attachment = {
+        "id": "att_" + "a" * 64,
+        "filename": "MYSQL_SERVICE_STOPPED.png",
+        "sha256": "b" * 64,
+        "storage": "attachments/" + "b" * 64 + ".png",
+        "uploaded_at": "2026-11-02T10:00:00+00:00",
+        "observed_at": "2026-11-02T09:00:00+00:00",
+        "observed_at_known": True,
+        "extracted_text": "503 Service Unavailable",
+        "anomalies": [{"description": "数据库错误页", "region": [], "text": "503"}],
+        "uncertain": [],
+        "model": "TEST/MOCK",
+    }
+    payload_evidence = [
+        *[item.model_dump(mode="json") for item in evidence],
+        {
+            "id": "evidence_att_" + "a" * 64,
+            "source": "attachment:att_" + "a" * 64,
+            "kind": "attachment",
+            "raw": {
+                "observed_at": attachment["observed_at"],
+                "observed_at_known": True,
+                "extracted_text": attachment["extracted_text"],
+                "anomalies": attachment["anomalies"],
+                "uncertain": [],
+                "model": "TEST/MOCK",
+            },
+            "captured_at": "2026-11-02T10:00:00+00:00",
+        },
+    ]
+    provider.diagnose_domain({"evidence": payload_evidence})
+    text = checkable_text(recorder.payload)
+    for token in SCENARIO_MARKERS + SCENARIO_RUNBOOKS + REGISTERED_ACTIONS + POINTING_FIELDS:
+        assert token not in text, f"截图证据载荷泄漏了 {token}"
+    # 用户可控的文件名与后台细节不得出现。
+    assert "MYSQL_SERVICE_STOPPED.png" not in text
+    assert "attachments/" not in text
+    assert attachment["sha256"] not in text

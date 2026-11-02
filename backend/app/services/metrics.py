@@ -46,11 +46,12 @@ def end_to_end_summary(store: Store) -> dict:
             if row.kind == "step":
                 payload = row.payload or {}
                 phase = payload.get("phase")
-                # 执行许可门禁不是模型调用：不能计入调用次数。
-                if (
-                    phase in {"DIAGNOSING", "PLANNING"}
-                    and payload.get("step_kind") != "AUTHORIZING"
-                ):
+                # 只有真的产出了模型结论的步骤才算一次模型调用：
+                # 执行许可门禁、截图冲突后的补查都没有调模型。
+                output = payload.get("output") or {}
+                if phase == "DIAGNOSING" and output.get("diagnosis"):
+                    model_calls += 1
+                elif phase == "PLANNING" and output.get("plan"):
                     model_calls += 1
         if any(row.kind == "execution" for row in rows):
             executed += 1
@@ -68,7 +69,9 @@ def end_to_end_summary(store: Store) -> dict:
         "executed": executed,
         "recovery_success_rate": round(recovered / executed, 4) if executed else None,
         "model_calls": model_calls,
+        # 平均每次工单花了几次模型调用；没有工单时是「不适用」。
         "model_calls_avg": round(model_calls / len(incidents), 2) if incidents else None,
+        # 闭环路径的调用次数来自审计记录本身，不存在「未知」这一说。
         "model_calls_unknown": 0,
         "note": "端到端指标只统计闭环路径真实产生的处置提议；纯诊断对照不适用。",
     }

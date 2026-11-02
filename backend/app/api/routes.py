@@ -247,9 +247,10 @@ def run_evaluation_safely(service, scenario, arms, attachment_ids=None) -> None:
     try:
         service.run_experiment(scenario, arms, attachment_ids or [])
     except DomainError as error:
-        logger.error("evaluation_failed scenario=%s code=%s", scenario, error.code)
+        # 不打印场景：真值不进日志（§4.1）。
+        logger.error("evaluation_failed code=%s", error.code)
     except Exception as error:  # pragma: no cover - 兜底，避免后台任务抛出
-        logger.error("evaluation_failed scenario=%s type=%s", scenario, type(error).__name__)
+        logger.error("evaluation_failed type=%s", type(error).__name__)
 
 
 @router.post("/evaluation/attachments", dependencies=admin, status_code=201)

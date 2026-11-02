@@ -74,11 +74,13 @@ class EvidenceAgent:
         """附件证据：截图只作为线索，恢复与否仍以探针实测为准。"""
         anomalies = attachment.get("anomalies") or []
         note = attachment_conflict(attachment, probes) or "截图只作为线索，恢复与否仍以探针实测为准"
+        # 文件名是用户可控文本、摘要是后台细节：都不进模型上下文（§4.3）。
+        # 来源只用附件 id，观测字段放在 raw 里；完整元信息留在附件自己的记录中。
+        attachment_id = str(attachment.get("id", "attachment"))
         return Evidence(
-            source=f"attachment:{attachment.get('filename', 'screenshot')}",
+            source=f"attachment:{attachment_id}",
             kind="attachment",
             raw={
-                "sha256": attachment.get("sha256"),
                 "extracted_text": attachment.get("extracted_text", ""),
                 "anomalies": anomalies,
                 "observed_at": attachment.get("observed_at"),
@@ -86,7 +88,6 @@ class EvidenceAgent:
                 "uncertain": attachment.get("uncertain", []),
                 "note": note,
             },
-            # 只带观测字段：存储路径、摘要这些后台细节不进模型上下文（§4.3）。
             attachment={
                 "observed_at": attachment.get("observed_at"),
                 "observed_at_known": attachment.get("observed_at_known"),
