@@ -7,6 +7,7 @@
 """
 
 import argparse
+import base64
 import json
 import sys
 import time
@@ -180,7 +181,13 @@ def render_markdown(transcript: dict, summary: dict | None = None) -> str:
     return "\n".join(lines)
 
 
-def run(rounds: int, arms: list[str], base_url: str, timeout_s: int) -> int:
+def run(
+    rounds: int,
+    arms: list[str],
+    base_url: str,
+    timeout_s: int,
+    attachment: str | None = None,
+) -> int:
     settings = Settings()
     token = settings.admin_token.get_secret_value()
     if not token:
@@ -234,13 +241,33 @@ def run(rounds: int, arms: list[str], base_url: str, timeout_s: int) -> int:
                 raise ValueError("HolmesGPT 服务未就绪，无法进行真实模型评测")
             summary = call("GET", "/api/evaluation/summary")
             print("PASS REAL 基线与模型服务预检")
+            attachment_ids: list[str] = []
+            if attachment:
+                # C 臂的视觉证据：先上传并识图，拿到 id 后随每次实验带进去。
+                content = base64.b64encode(Path(attachment).read_bytes()).decode("ascii")
+                uploaded = call(
+                    "POST",
+                    "/api/evaluation/attachments",
+                    {
+                        "filename": Path(attachment).name,
+                        "content_base64": content,
+                        "note": "评测用视觉证据",
+                    },
+                )
+                attachment_ids.append(uploaded["id"])
+                print(f"PASS 视觉证据已就绪：{uploaded['filename']}")
             for scenario in ("MYSQL_DOWN", "REDIS_DOWN", "NGINX_502"):
                 for index in range(rounds):
                     before = {row["id"] for row in rows()}
                     call(
                         "POST",
                         "/api/evaluation/runs",
-                        {"scenario": scenario, "arms": arms, "confirm": True},
+                        {
+                            "scenario": scenario,
+                            "arms": arms,
+                            "confirm": True,
+                            "attachment_ids": attachment_ids,
+                        },
                         "eval-" + uuid4().hex,
                     )
                     deadline = time.monotonic() + timeout_s
@@ -317,6 +344,7 @@ if __name__ == "__main__":
     parser.add_argument("--arms", default="A,B", help="参与对照的实验臂，默认 A,B")
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     parser.add_argument("--timeout", type=int, default=180, help="单次实验等待秒数")
+    parser.add_argument("--attachment", default=None, help="C 臂用的截图路径（PNG / JPEG / WebP）")
     arguments = parser.parse_args()
     sys.exit(
         run(
@@ -324,5 +352,6 @@ if __name__ == "__main__":
             [item.strip() for item in arguments.arms.split(",") if item.strip()],
             arguments.base_url,
             arguments.timeout,
+            arguments.attachment,
         )
     )
