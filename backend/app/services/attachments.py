@@ -11,6 +11,7 @@
 import base64
 import binascii
 import hashlib
+import json
 import logging
 from pathlib import Path
 
@@ -72,7 +73,7 @@ class AttachmentService:
         if not path.exists():
             path.write_bytes(content)
         return {
-            "id": f"att_{digest[:16]}",
+            "id": f"att_{digest}",
             "filename": safe_filename(filename),
             "mime": mime,
             "sha256": digest,
@@ -88,6 +89,29 @@ class AttachmentService:
             "model": self.settings.vision_model or "not_configured",
         }
 
+    def save_metadata(self, attachment: dict) -> None:
+        """把附件元信息（含识图结果）落盘，评测的后台任务才能读到。"""
+        digest = attachment.get("sha256")
+        if not digest:
+            return
+        self.folder.mkdir(parents=True, exist_ok=True)
+        (self.folder / f"{digest}.json").write_text(
+            json.dumps(attachment, ensure_ascii=False), encoding="utf-8"
+        )
+
+    def load(self, attachment_id: str) -> dict | None:
+        """按附件 id 读回元信息；不存在或 id 不合法时返回 None。"""
+        digest = str(attachment_id).removeprefix("att_")
+        if not digest or "/" in digest or "\\" in digest or ".." in digest:
+            return None
+        path = self.folder / f"{digest}.json"
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
     def discard(self, attachment: dict) -> None:
         """删除没有被任何工单引用的附件文件（分析失败时的孤儿文件）。"""
         storage = attachment.get("storage")
@@ -100,6 +124,7 @@ class AttachmentService:
             logger.warning("attachment_discard_failed storage=%s", storage)
 
     def analyze(self, attachment: dict, note: str = "") -> dict:
+        """调用视觉模型提取观测；结果同时落盘，供评测链路读取。"""
         """调用视觉模型提取观测，并补齐「时间未知」等显式标注。"""
         path = self.settings.data_dir / attachment["storage"]
         content = path.read_bytes()
@@ -120,6 +145,7 @@ class AttachmentService:
                 *updated["uncertain"],
                 "截图内没有可识别的观测时间，时间未知",
             ]
+        self.save_metadata(updated)
         return updated
 
     def conflict_note(self, attachment: dict, probes: list[Probe]) -> str | None:

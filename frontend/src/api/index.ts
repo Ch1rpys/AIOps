@@ -130,12 +130,32 @@ export const api = {
       undefined,
       evaluationView,
     ),
-  triggerEvaluation: (scenario: ScenarioKey, arms: EvaluationArm[], key: string) =>
+  triggerEvaluation: (
+    scenario: ScenarioKey,
+    arms: EvaluationArm[],
+    key: string,
+    attachmentIds: string[] = [],
+  ) =>
     request<{ accepted: boolean; scenario: string; arms: EvaluationArm[]; status: string }>(
       '/evaluation/runs',
       'POST',
-      { scenario, arms, confirm: true },
+      { scenario, arms, confirm: true, attachment_ids: attachmentIds },
       key,
+      true,
+    ),
+  uploadEvaluationAttachment: (filename: string, contentBase64: string, note = '') =>
+    request<{
+      id: string;
+      filename: string;
+      observed_at: string | null;
+      observed_at_known: boolean;
+      anomalies: { description: string }[];
+      uncertain: string[];
+    }>(
+      '/evaluation/attachments',
+      'POST',
+      { filename, content_base64: contentBase64, note },
+      undefined,
       true,
     ),
 };

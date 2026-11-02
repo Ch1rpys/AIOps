@@ -32,6 +32,9 @@ const evaluationView = ref(false);
 const scenario = ref<ScenarioKey>('MYSQL_DOWN');
 const arms = ref<EvaluationArm[]>(['A', 'B']);
 const triggering = ref(false);
+const uploading = ref(false);
+const attachmentId = ref('');
+const attachmentName = ref('');
 
 let version = 0;
 let disposed = false;
@@ -107,6 +110,35 @@ async function toggleDetail(row: EvaluationRunRow) {
   }
 }
 
+async function uploadAttachment(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  uploading.value = true;
+  error.value = '';
+  try {
+    const base64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '');
+      reader.onerror = () => reject(new Error('读取文件失败'));
+      reader.readAsDataURL(file);
+    });
+    const uploaded = await api.uploadEvaluationAttachment(file.name, base64);
+    attachmentId.value = uploaded.id;
+    attachmentName.value = uploaded.filename;
+    notice.value = uploaded.observed_at_known
+      ? `截图已就绪：识别到 ${uploaded.anomalies.length} 处异常`
+      : '截图已就绪，但图里没有可识别的时间，观测时间标为未知';
+  } catch (cause) {
+    error.value = errorMessage(cause);
+    attachmentId.value = '';
+    attachmentName.value = '';
+  } finally {
+    uploading.value = false;
+    input.value = '';
+  }
+}
+
 async function trigger() {
   if (!canTrigger.value) {
     error.value = '请先在右上角「设置」中粘贴 ADMIN_TOKEN。';
@@ -116,7 +148,13 @@ async function trigger() {
   error.value = '';
   notice.value = '';
   try {
-    await api.triggerEvaluation(scenario.value, arms.value, `EVAL-${Date.now()}`);
+    if (arms.value.includes('C') && !attachmentId.value) {
+      error.value = 'C 臂需要先上传截图：没有视觉证据时它等价于 B 臂，是假对照。';
+      return;
+    }
+    await api.triggerEvaluation(scenario.value, arms.value, `EVAL-${Date.now()}`, [
+      ...(attachmentId.value ? [attachmentId.value] : []),
+    ]);
     notice.value = '实验已触发：注入故障 → 固化证据快照 → 各臂在同一快照上诊断。';
     await load();
   } catch (cause) {
@@ -175,7 +213,26 @@ onUnmounted(() => {
         <select v-model="arms" multiple :disabled="triggering" size="3">
           <option value="A">A · 单次诊断</option>
           <option value="B">B · 多 Agent 复核</option>
+          <option value="C">C · 增加视觉证据</option>
         </select>
+      </label>
+      <label v-if="arms.includes('C')">
+        <span>视觉证据截图</span>
+        <input
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          :disabled="triggering || uploading"
+          @change="uploadAttachment"
+        />
+        <span class="muted text-12">
+          {{
+            uploading
+              ? '上传并识别中…'
+              : attachmentId
+                ? `已就绪：${attachmentName}`
+                : 'C 臂必须先上传截图，否则会被拒绝（不做降级伪装）'
+          }}
+        </span>
       </label>
       <ElButton type="primary" :loading="triggering" :disabled="!canTrigger" @click="trigger">
         触发实验

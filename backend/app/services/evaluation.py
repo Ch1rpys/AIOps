@@ -97,21 +97,26 @@ class EvaluationService:
         probes: Probes,
         evidence: EvidenceAgent,
         provider,
+        attachments=None,
     ):
         self.settings, self.store = settings, store
         self.docker, self.probes = docker, probes
         self.evidence, self.provider = evidence, provider
+        # 视觉证据（C 臂）走同一套受控存储与识别服务。
+        self.attachments = attachments
         self.lock = threading.RLock()
 
     # ---- 对外入口 ------------------------------------------------------------
 
-    def run_experiment(self, scenario: Scenario, arms: list[str]) -> dict:
+    def run_experiment(
+        self, scenario: Scenario, arms: list[str], attachment_ids: list[str] | None = None
+    ) -> dict:
         """一次盲诊实验：注入 → 固化快照 → 各臂在同一快照上对照。"""
         holder = new_id("eval")
         with self.lock:
             self.store.acquire_evaluation_lease(holder)
             try:
-                return self._experiment(scenario, arms)
+                return self._experiment(scenario, arms, attachment_ids or [])
             except Exception as error:
                 # 失败也要落库：不能因为实验失败就看不到这次尝试（§9.3）。
                 self._record_failure(scenario, arms, error)
@@ -167,7 +172,9 @@ class EvaluationService:
 
     # ---- 实验主流程 ----------------------------------------------------------
 
-    def _experiment(self, scenario: Scenario, arms: list[str]) -> dict:
+    def _experiment(
+        self, scenario: Scenario, arms: list[str], attachment_ids: list[str] | None = None
+    ) -> dict:
         # 一次实验只核验一次版本与工具权限：每次模型调用前都核验会让单臂
         # 最坏耗时突破 45 秒总预算，「超限终止」就不成立了（§9.4）。
         self.provider.ensure_capabilities()
@@ -183,6 +190,7 @@ class EvaluationService:
             stopped = True
             container_ms = round((time.monotonic() - container_started) * 1000)
             snapshot, extra_collects, collect_ms = self._capture_snapshot(scenario)
+            snapshot = snapshot + self._visual_evidence(attachment_ids or [])
         finally:
             # 无论实验成功还是中途失败，都要把实验环境恢复健康，
             # 不能把停掉的容器留在那里让工作台无法使用。
@@ -244,6 +252,28 @@ class EvaluationService:
             raise DomainError("FAULT_NOT_CONFIRMED", "停止操作后未取得故障成立的证据", 502)
         return evidence, max(0, collected - 1), round((time.monotonic() - started) * 1000)
 
+    def _visual_evidence(self, attachment_ids: list[str]) -> list[Evidence]:
+        """把上传的截图并入同一份快照：所有臂看到完全相同的输入。"""
+        items: list[Evidence] = []
+        for attachment_id in attachment_ids:
+            if self.attachments is None:
+                raise DomainError("EVALUATION_ATTACHMENT_UNAVAILABLE", "视觉证据服务不可用", 503)
+            attachment = self.attachments.load(attachment_id)
+            if attachment is None:
+                raise DomainError(
+                    "EVALUATION_ATTACHMENT_NOT_FOUND", f"截图不存在：{attachment_id}", 404
+                )
+            items.append(
+                Evidence(
+                    id=f"evidence_{attachment_id}",
+                    source=f"attachment:{attachment.get('filename', attachment_id)}",
+                    kind="attachment",
+                    raw=attachment,
+                    captured_at=now(),
+                )
+            )
+        return items
+
     def _restore(self, scenario: Scenario) -> tuple[bool, int]:
         """把实验环境恢复健康。评测只布置与拆除环境，不执行模型提议的处置。"""
         started = time.monotonic()
@@ -287,6 +317,9 @@ class EvaluationService:
             if arm == "A":
                 record.update(self._arm_a(payload, snapshot, required, budget, timeout))
             elif arm == "B":
+                record.update(self._arm_b(payload, snapshot, required, budget, timeout))
+            elif arm == "C":
+                # C 臂 = B 臂 + 同一份快照里的视觉证据（§4.5）。
                 record.update(self._arm_b(payload, snapshot, required, budget, timeout))
             else:
                 raise DomainError("EVALUATION_ARM_UNSUPPORTED", "该实验臂尚未实现", 409)

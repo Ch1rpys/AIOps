@@ -222,6 +222,8 @@ class EvaluationRequest(StrictModel):
 
     scenario: Scenario
     arms: list[Literal["A", "B", "C"]] = Field(default_factory=lambda: ["A", "B"])
+    # C 臂用的截图 id（先 POST /api/evaluation/attachments 上传得到）。
+    attachment_ids: list[str] = Field(default_factory=list, max_length=4)
     confirm: StrictBool
 
     @field_validator("confirm")

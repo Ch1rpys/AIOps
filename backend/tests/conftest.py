@@ -246,7 +246,9 @@ class TestWorld:
             mode="TEST/MOCK",
             attachments=attachments,
         )
-        evaluation = EvaluationService(settings, store, self, self, evidence, self)
+        evaluation = EvaluationService(
+            settings, store, self, self, evidence, self, attachments=attachments
+        )
         return platform, evaluation
 
 

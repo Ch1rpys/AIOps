@@ -521,6 +521,14 @@ async function run() {
       assert.ok(records, "records card must exist");
       assert.ok(!records.includes("MYSQL_DOWN"), "truth must not be exposed by default");
       // 切到评测视图后才显示真值。
+      // C 臂必须先有视觉证据：没有截图时触发要被拒绝，不能悄悄退化成 B 臂。
+      await page.getByText("C · 增加视觉证据", { exact: false }).first().click();
+      await page.getByText("视觉证据截图", { exact: false }).first().waitFor();
+      await page.getByRole("button", { name: "触发实验" }).click();
+      await page.getByText("C 臂需要先上传截图", { exact: false }).waitFor();
+      // 取消 C：多选框里再点一次是取消选中。
+      await page.getByText("C · 增加视觉证据", { exact: false }).first().click();
+      // 切到评测视图后才显示真值。
       await page.getByText("评测视图（显示真值与判卷结果）").click();
       await page.getByText("真值：", { exact: false }).first().waitFor();
       await page.screenshot({

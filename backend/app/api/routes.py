@@ -242,14 +242,41 @@ def evaluation_view(request: Request) -> bool:
     return True
 
 
-def run_evaluation_safely(service, scenario, arms) -> None:
+def run_evaluation_safely(service, scenario, arms, attachment_ids=None) -> None:
     """后台执行评测：异常只记录，不让后台任务把响应周期搞崩。"""
     try:
-        service.run_experiment(scenario, arms)
+        service.run_experiment(scenario, arms, attachment_ids or [])
     except DomainError as error:
         logger.error("evaluation_failed scenario=%s code=%s", scenario, error.code)
     except Exception as error:  # pragma: no cover - 兜底，避免后台任务抛出
         logger.error("evaluation_failed scenario=%s type=%s", scenario, type(error).__name__)
+
+
+@router.post("/evaluation/attachments", dependencies=admin, status_code=201)
+def create_evaluation_attachment(
+    body: AttachmentRequest,
+    service=Depends(evaluation),
+):
+    """上传给评测用的截图（C 臂的视觉证据）。
+
+    这里不创建工单：评测链路不产生 Incident，真值不进入任何上下文。
+    """
+    attachments = service.attachments
+    attachment = attachments.store(body.filename, body.content_base64)
+    try:
+        attachment = attachments.analyze(attachment, body.note)
+    except DomainError:
+        attachments.discard(attachment)
+        raise
+    return {
+        "id": attachment["id"],
+        "filename": attachment["filename"],
+        "mime": attachment["mime"],
+        "observed_at": attachment.get("observed_at"),
+        "observed_at_known": attachment.get("observed_at_known"),
+        "anomalies": attachment.get("anomalies") or [],
+        "uncertain": attachment.get("uncertain") or [],
+    }
 
 
 @router.post("/evaluation/runs", dependencies=admin, status_code=202)
@@ -260,6 +287,13 @@ def create_evaluation_run(
     service=Depends(evaluation),
     platform_service=Depends(platform),
 ):
+    if "C" in body.arms and not body.attachment_ids:
+        # C 臂没有视觉证据就退化成 B 臂：那是假对照，明确拒绝而不是降级伪装。
+        raise DomainError(
+            "EVALUATION_ATTACHMENT_REQUIRED",
+            "C 臂需要先上传截图（POST /api/evaluation/attachments）并带上 attachment_ids",
+            409,
+        )
     scope, fingerprint = "evaluation", f"{body.scenario.value}:{','.join(body.arms)}"
     with platform_service.store.session() as session:
         previous = platform_service.store.receipt(session, key, scope, fingerprint)
@@ -277,7 +311,7 @@ def create_evaluation_run(
     }
     with platform_service.store.session() as session, session.begin():
         platform_service.store.save_receipt(session, key, scope, fingerprint, response)
-    tasks.add_task(run_evaluation_safely, service, body.scenario, body.arms)
+    tasks.add_task(run_evaluation_safely, service, body.scenario, body.arms, body.attachment_ids)
     return response
 
 

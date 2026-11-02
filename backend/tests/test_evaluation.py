@@ -4,16 +4,35 @@
 真值不外泄、A/B 在同一份快照上可比、失败与拒答不被美化。
 """
 
+import base64
+
 import pytest
 from app.config import DomainError
 from app.repositories.store import EvaluationRun
-from app.schemas.domain import now
+from app.schemas.domain import (
+    VisionAnomaly,
+    VisionObservation,
+    now,
+)
+
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"TEST-MOCK-image-bytes"
 
 
-def trigger(client, scenario="MYSQL_DOWN", arms=("A", "B"), key="TEST-eval-0001"):
+def trigger(
+    client,
+    scenario="MYSQL_DOWN",
+    arms=("A", "B"),
+    key="TEST-eval-0001",
+    attachment_ids=None,
+):
     response = client.post(
         "/api/evaluation/runs",
-        json={"scenario": scenario, "arms": list(arms), "confirm": True},
+        json={
+            "scenario": scenario,
+            "arms": list(arms),
+            "confirm": True,
+            "attachment_ids": list(attachment_ids or []),
+        },
         headers={"Idempotency-Key": key},
     )
     assert response.status_code == 202, response.text
@@ -312,3 +331,49 @@ def test_failed_model_call_keeps_its_real_cost(client, world):
     assert arm["model_calls_avg"] == 1
     assert arm["model_calls_unknown"] == 0
     assert arm["token_usage_total"] is None
+
+
+def test_c_arm_requires_a_visual_attachment(client, world):
+    """C 臂没有视觉证据就退化成 B 臂：那是假对照，明确拒绝而不是降级伪装。"""
+    response = client.post(
+        "/api/evaluation/runs",
+        json={"scenario": "MYSQL_DOWN", "arms": ["C"], "confirm": True},
+        headers={"Idempotency-Key": "TEST-eval-c-no-attachment"},
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "EVALUATION_ATTACHMENT_REQUIRED"
+
+
+def test_c_arm_runs_on_the_same_snapshot_with_visual_evidence(client, world):
+    """C 臂 = B 臂 + 同一份快照里的视觉证据：所有臂看到的输入完全相同。"""
+    world.vision_observation = VisionObservation(
+        observed_at="2026-11-02T10:00:00",
+        extracted_text="503 Service Unavailable",
+        anomalies=[VisionAnomaly(description="数据库错误页", region=[], text="503")],
+    )
+    upload = client.post(
+        "/api/evaluation/attachments",
+        json={
+            "filename": "error-page.png",
+            "content_base64": base64.b64encode(PNG_BYTES).decode("ascii"),
+            "note": "故障时刻的截图",
+        },
+    )
+    assert upload.status_code == 201, upload.text
+    attachment_id = upload.json()["id"]
+    assert attachment_id.startswith("att_")
+    assert upload.json()["observed_at_known"] is True
+
+    trigger(client, arms=("B", "C"), key="TEST-eval-c", attachment_ids=[attachment_id])
+    rows = runs(client, limit=10)
+    assert len(rows) == 2
+    assert {row["arm"] for row in rows} == {"B", "C"}
+    # 两臂共用同一份快照（含视觉证据）。
+    assert len({row["snapshot_hash"] for row in rows}) == 1
+    detail = client.get(f"/api/evaluation/runs/{rows[0]['id']}").json()
+    items = detail["evidence"].get("items") or []
+    kinds = {item["kind"] for item in items}
+    assert "attachment" in kinds
+    attachment = next(item for item in items if item["kind"] == "attachment")
+    # 视觉观测确实进了快照：模型看到的是截图里的异常，不是空壳。
+    assert attachment["raw"]["anomalies"][0]["description"] == "数据库错误页"

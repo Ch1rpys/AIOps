@@ -85,7 +85,15 @@ def create_app(settings: Settings | None = None, factory=None) -> FastAPI:
                     ),
                 )
                 evaluation_service = EvaluationService(
-                    settings, store, docker, probes, evidence, provider
+                    settings,
+                    store,
+                    docker,
+                    probes,
+                    evidence,
+                    provider,
+                    attachments=AttachmentService(
+                        settings, DashScopeVisionProvider(settings, client)
+                    ),
                 )
             app.state.platform = service
             app.state.evaluation = evaluation_service
