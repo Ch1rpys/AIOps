@@ -72,3 +72,22 @@ def test_unknown_version_is_rejected(tmp_path):
     with pytest.raises(DomainError) as error:
         Store(path)
     assert error.value.code == "SCHEMA_VERSION_MISMATCH"
+
+
+def test_stale_evaluation_lease_does_not_lock_the_lab(tmp_path):
+    """进程崩在评测中途时，过期租约不能永久锁死工作台。"""
+    from datetime import UTC, datetime, timedelta
+
+    from app.repositories.store import EvaluationLease
+
+    store = Store(tmp_path / "lease.db")
+    with store.session() as session, session.begin():
+        session.add(
+            EvaluationLease(
+                id=1,
+                holder="eval_stale",
+                acquired_at=(datetime.now(UTC) - timedelta(hours=1)).isoformat(),
+            )
+        )
+    assert store.evaluation_busy() is False
+    store.close()

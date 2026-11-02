@@ -72,6 +72,11 @@ class Platform:
                     },
                 )
                 self.store.audit(session, item.id, "recovery", item.detail["error"])
+        # 进程崩在评测中途时，评测租约会留在库里并锁死工作台；
+        # 启动时清掉过期租约，不要求操作者手改数据库。
+        if self.store.evaluation_busy():
+            logger.warning("stale_evaluation_lease_cleared")
+        self.store.clear_expired_leases()
 
     @staticmethod
     def graph_config(incident_id: str) -> dict:

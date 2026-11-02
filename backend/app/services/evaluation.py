@@ -37,6 +37,21 @@ PROMPT_VERSION = "blind-v1"
 EXCLUDED_STATUS = {"BUDGET_EXCEEDED", "ERROR"}
 
 
+def merge_usage(first: dict | None, second: dict | None) -> dict | None:
+    """合并两次模型调用的 token 用量。
+
+    只有一份已知时不能当成总量 —— 报告里要标「部分已知」。
+    """
+    if first is None and second is None:
+        return None
+    merged: dict[str, int] = {}
+    for usage in (first or {}, second or {}):
+        for key, value in usage.items():
+            if isinstance(value, int):
+                merged[key] = merged.get(key, 0) + value
+    return merged or None
+
+
 class Budget:
     """§9.4 的预算口径：预算是**上限**不是配额。
 
@@ -93,16 +108,18 @@ class EvaluationService:
             self.store.acquire_evaluation_lease(holder)
             try:
                 return self._experiment(scenario, arms)
-            except DomainError as error:
+            except Exception as error:
                 # 失败也要落库：不能因为实验失败就看不到这次尝试（§9.3）。
                 self._record_failure(scenario, arms, error)
                 raise
             finally:
                 self.store.release_evaluation_lease(holder)
 
-    def _record_failure(self, scenario: Scenario, arms: list[str], error: DomainError) -> None:
+    def _record_failure(self, scenario: Scenario, arms: list[str], error: Exception) -> None:
         """实验在中途失败：每个请求的臂各留一条失败记录。"""
-        fingerprint = hashlib.sha256(f"failed:{scenario.value}:{error.code}".encode()).hexdigest()
+        code = error.code if isinstance(error, DomainError) else type(error).__name__
+        message = error.message if isinstance(error, DomainError) else str(error)
+        fingerprint = hashlib.sha256(f"failed:{scenario.value}:{code}".encode()).hexdigest()
         for arm in arms:
             run = EvaluationRun(
                 id=new_id("evalrun"),
@@ -112,8 +129,8 @@ class EvaluationService:
                 evidence_json={},
                 diagnosis_json={
                     "status": "ERROR",
-                    "code": error.code,
-                    "message": error.message,
+                    "code": code,
+                    "message": message,
                     "model_calls": 0,
                     "extra_collects": 0,
                     "timing": {"total_ms": 0},
@@ -146,6 +163,9 @@ class EvaluationService:
     # ---- 实验主流程 ----------------------------------------------------------
 
     def _experiment(self, scenario: Scenario, arms: list[str]) -> dict:
+        # 一次实验只核验一次版本与工具权限：每次模型调用前都核验会让单臂
+        # 最坏耗时突破 45 秒总预算，「超限终止」就不成立了（§9.4）。
+        self.provider.ensure_capabilities()
         baseline = lab_baseline(self.docker, self.probes)
         if not baseline["healthy"]:
             raise DomainError("BASELINE_UNHEALTHY", "四个 demo 服务与探针未全部通过，禁止评测", 409)
@@ -162,7 +182,16 @@ class EvaluationService:
             # 无论实验成功还是中途失败，都要把实验环境恢复健康，
             # 不能把停掉的容器留在那里让工作台无法使用。
             if stopped:
-                restored, restore_ms = self._restore(scenario)
+                try:
+                    restored, restore_ms = self._restore(scenario)
+                except DomainError as error:
+                    # 恢复失败不能顶掉原始错误：原始错误才是这次实验的根因。
+                    logger.error(
+                        "evaluation_restore_failed scenario=%s code=%s",
+                        scenario.value,
+                        error.code,
+                    )
+                    restored = False
                 if not restored:
                     logger.error("evaluation_lab_not_restored scenario=%s", scenario.value)
         fingerprint = self._fingerprint(snapshot)
@@ -256,13 +285,16 @@ class EvaluationService:
                 record.update(self._arm_b(payload, snapshot, required, budget, timeout))
             else:
                 raise DomainError("EVALUATION_ARM_UNSUPPORTED", "该实验臂尚未实现", 409)
-        except DomainError as error:
-            if error.code == "EVALUATION_BUDGET_EXCEEDED":
-                record = {**record, "status": "BUDGET_EXCEEDED", "message": error.message}
-            elif error.code == "AI_INVALID_RESPONSE":
-                record = {**record, "status": "INVALID_RESPONSE", "message": error.message}
+        except Exception as error:
+            # 任何异常都要留下记录：失败样本不能凭空消失（§9.3）。
+            code = error.code if isinstance(error, DomainError) else type(error).__name__
+            message = error.message if isinstance(error, DomainError) else str(error)
+            if code == "EVALUATION_BUDGET_EXCEEDED":
+                record = {**record, "status": "BUDGET_EXCEEDED", "message": message}
+            elif code == "AI_INVALID_RESPONSE":
+                record = {**record, "status": "INVALID_RESPONSE", "message": message}
             else:
-                record = {**record, "status": "ERROR", "code": error.code, "message": error.message}
+                record = {**record, "status": "ERROR", "code": code, "message": message}
         record.setdefault("status", "COMPLETED")
         record["timing"] = {
             "model_ms": record.get("model_ms", 0),
@@ -329,7 +361,11 @@ class EvaluationService:
         first_trace = ModelTrace()
         budget.check()
         first = self.provider.diagnose_domain(
-            payload, required_ids=required, timeout=timeout, trace=first_trace
+            payload,
+            required_ids=required,
+            timeout=timeout,
+            trace=first_trace,
+            verify_capabilities=False,
         )
         budget.charge()
 
@@ -341,6 +377,7 @@ class EvaluationService:
                 required_ids=required,
                 timeout=timeout,
                 trace=review_trace,
+                verify_capabilities=False,
             )
         except DomainError as error:
             # 复核失败也要留下第一次的原始结论：失败与原始输出全部落库，不美化（§9.3）。
@@ -356,6 +393,7 @@ class EvaluationService:
                 "model_calls": budget.calls,
                 "model_ms": first_trace.latency_ms,
                 "usage": first_trace.usage,
+                "usage_partial": True,
                 "contract_violations": self._violations(first, snapshot),
                 "adjudication": {
                     "rule": "复核失败，未裁决；保留第一次诊断的原始结论",
@@ -382,7 +420,8 @@ class EvaluationService:
             "confidence": first.confidence,
             "model_calls": budget.calls,
             "model_ms": first_trace.latency_ms + review_trace.latency_ms,
-            "usage": first_trace.usage or review_trace.usage,
+            "usage": merge_usage(first_trace.usage, review_trace.usage),
+            "usage_partial": bool(first_trace.usage) != bool(review_trace.usage),
             "contract_violations": [
                 *self._violations(first, snapshot),
                 *self._violations(review, snapshot),

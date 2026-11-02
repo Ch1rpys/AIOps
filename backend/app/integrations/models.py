@@ -132,12 +132,21 @@ class HolmesDiagnosisProvider:
                 {"raw_output": str(body.get("analysis", ""))[:4000]},
             ) from error
 
+    def ensure_capabilities(self) -> None:
+        """核验一次 HolmesGPT 版本与工具权限。
+
+        评测在一次实验内只核验一次：否则每次模型调用前都多一次
+        `GET /api/info`，单臂最坏耗时就会突破「单次调用不可能突破总预算」这条（§9.4）。
+        """
+        self.check_capabilities(self.request_headers())
+
     def diagnose_domain(
         self,
         context: dict,
         required_ids: list[str] | None = None,
         timeout: int | None = None,
         trace: ModelTrace | None = None,
+        verify_capabilities: bool = True,
     ) -> Diagnosis:
         """盲诊专用诊断入口：不查场景注册表，不注入任何指向性字段。
 
@@ -148,7 +157,8 @@ class HolmesDiagnosisProvider:
           提示词要求「全部」而不是「相关」，避免措辞差异被记成模型能力不足。
         """
         headers = self.request_headers()
-        self.check_capabilities(headers)
+        if verify_capabilities:
+            self.check_capabilities(headers)
         evidence = [Evidence.model_validate(item) for item in context.get("evidence", [])]
         required = (
             list(required_ids) if required_ids is not None else required_evidence_ids(evidence)
@@ -185,6 +195,7 @@ class HolmesDiagnosisProvider:
         required_ids: list[str] | None = None,
         timeout: int | None = None,
         trace: ModelTrace | None = None,
+        verify_capabilities: bool = True,
     ) -> DomainReview:
         """B 臂的独立复核入口：只审阅第一次结论，不查场景注册表。
 
@@ -248,16 +259,20 @@ class HolmesDiagnosisProvider:
         if self.settings.holmes_model:
             payload["model"] = self.settings.holmes_model
         started = time.monotonic()
-        body = post_json(
-            self.client,
-            self.settings.holmes_url + "/api/chat",
-            payload,
-            headers,
-            timeout or self.settings.model_timeout,
-        )
+        try:
+            body = post_json(
+                self.client,
+                self.settings.holmes_url + "/api/chat",
+                payload,
+                headers,
+                timeout or self.settings.model_timeout,
+            )
+        finally:
+            # 失败也要记真实耗时：记 0 等于伪造一个实测值（§9.3）。
+            if trace is not None:
+                trace.latency_ms = round((time.monotonic() - started) * 1000)
         if trace is not None:
             trace.raw = body
-            trace.latency_ms = round((time.monotonic() - started) * 1000)
             trace.usage = extract_usage(body)
         return body
 

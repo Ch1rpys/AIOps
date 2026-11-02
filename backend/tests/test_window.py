@@ -7,6 +7,8 @@
 - 窗口内健康不能被宣称为「永久不复发」。
 """
 
+import time
+
 import pytest
 from app.config import Settings
 from app.integrations.probes import Probes
@@ -144,3 +146,26 @@ def test_stable_window_keeps_the_existing_resolution_path(client, world):
     item = client.get(f"/api/incidents/{incident_id}").json()
     assert item["status"] == "RESOLVED"
     assert item["detail"]["verification"]["window"]["stable"] is True
+
+
+def test_window_seconds_is_reachable_with_shipped_defaults(tmp_path, client, monkeypatch):
+    """观察窗口必须真的能被采满：样本数不够时窗口秒数就是死参数（§8.2）。"""
+    settings = window_settings(
+        tmp_path,
+        verification_window_seconds=2,
+        verification_interval=0.5,
+        verification_required_passes=2,
+        verification_window_samples=2,
+    )
+    probes = Probes(settings, client)
+    monkeypatch.setattr(probes, "for_scenario", lambda scenario: sample(Verdict.PASS))
+    started = time.monotonic()
+    verification = probes.verify(lambda items: None)
+    elapsed = time.monotonic() - started
+    window = verification.window
+    assert window["enabled"] is True
+    # 窗口时长真的被采满了，而不是靠样本数上限提前结束。
+    assert elapsed >= settings.verification_window_seconds
+    assert window["samples"] >= 4
+    assert window["stable"] is True
+    assert window["instability"] is False

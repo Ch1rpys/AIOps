@@ -19,7 +19,16 @@ from app.config import CHECK_IDS, DomainError, Settings
 from app.integrations.models import DiagnosisProvider, ModelTrace, PlannerProvider
 from app.integrations.probes import Probes
 from app.repositories.store import Store
-from app.schemas.domain import Evidence, Plan, Scenario, Status, Verdict, new_id, now
+from app.schemas.domain import (
+    Diagnosis,
+    Evidence,
+    Plan,
+    Scenario,
+    Status,
+    Verdict,
+    new_id,
+    now,
+)
 from app.services.executor import ActionExecutor, validate_plan
 
 logger = logging.getLogger("aiops.workflow")
@@ -78,6 +87,10 @@ class Workflow:
         builder.add_node("supplement", self.supplement)
         builder.add_edge("supplement", "diagnose")
         builder.add_conditional_edges("diagnose", self.after_diagnose)
+        # 执行许可校验放在补采之后：模型请求补采时必然自报「证据不足」，
+        # 若在诊断节点就校验，补采永远等不到机会（§6.2）。
+        builder.add_node("authorize", self.authorize)
+        builder.add_conditional_edges("authorize", lambda s: END if s.get("error") else "plan")
         builder.add_conditional_edges("plan", lambda s: END if s.get("error") else "approval")
         builder.add_conditional_edges(
             "approval", lambda s: "execute" if s["decision"] == "approve" else END
@@ -94,7 +107,18 @@ class Workflow:
             item = self.store.require(session, state["incident_id"])
             self.store.update(session, item, status, attempt=state["attempt"], **detail)
 
-    def guarded(self, state: IncidentState, phase: Status, operation: Callable[[], dict]) -> dict:
+    def guarded(
+        self,
+        state: IncidentState,
+        phase: Status,
+        operation: Callable[[], dict],
+        label: str | None = None,
+    ) -> dict:
+        """label 用于把「同一状态下的不同步骤」在审计记录里区分开。
+
+        例如执行许可校验与诊断都发生在 DIAGNOSING 状态，
+        但只有诊断那一步真的调用了模型，统计模型调用次数时不能把门禁算进去。
+        """
         started_at, start = now(), time.monotonic()
         self.phase(state, phase)
         try:
@@ -132,7 +156,7 @@ class Workflow:
         record = {
             "run_id": state["run_id"],
             "attempt": state["attempt"],
-            "phase": phase,
+            "phase": label or phase,
             "status": outcome,
             "started_at": started_at,
             "ended_at": now(),
@@ -227,11 +251,6 @@ class Workflow:
             # 闭环入口同时要求引用完整性与执行许可；盲诊路径只查完整性，另走独立入口。
             collected = [Evidence.model_validate(e) for e in state["evidence"]]
             validate_evidence_integrity(result, collected)
-            validate_execution_preconditions(
-                result,
-                collected,
-                Scenario(state.get("scenario_key", "MYSQL_DOWN")),
-            )
             return {"diagnosis": result.model_dump(mode="json")}
 
         return self.guarded(state, Status.DIAGNOSING, operation)
@@ -297,17 +316,17 @@ class Workflow:
             return END
         requested = (state.get("diagnosis") or {}).get("requested_checks") or []
         if not requested:
-            return "plan"
+            return "authorize"
         rounds = state.get("supplement_count", 0)
         if rounds >= self.settings.supplement_max_rounds:
             self.phase(state, Status.DIAGNOSING, supplement_stopped="已达补采轮次上限")
-            return "plan"
+            return "authorize"
         if self.elapsed_seconds(state) >= self.settings.supplement_budget_seconds:
             self.phase(state, Status.DIAGNOSING, supplement_stopped="补采耗时预算已用尽")
-            return "plan"
+            return "authorize"
         if not self.pending_requests(state):
             self.phase(state, Status.DIAGNOSING, supplement_stopped="请求的检查已全部采集或未注册")
-            return "plan"
+            return "authorize"
         return "supplement"
 
     @staticmethod
@@ -366,6 +385,24 @@ class Workflow:
             return {"plan": result.model_dump(mode="json"), "plan_id": plan_id}
 
         return self.guarded(state, Status.PLANNING, operation)
+
+    def authorize(self, state):
+        """执行许可：只有拿到许可的诊断才能进入规划与审批。
+
+        补采预算用尽后仍不自证证据充分，就在这里被拦下 ——
+        闭环入口放行到审批页的门禁不放松（§4.2）。
+        """
+
+        def operation():
+            collected = [Evidence.model_validate(e) for e in state["evidence"]]
+            validate_execution_preconditions(
+                Diagnosis.model_validate(state["diagnosis"]),
+                collected,
+                Scenario(state.get("scenario_key", "MYSQL_DOWN")),
+            )
+            return {}
+
+        return self.guarded(state, Status.DIAGNOSING, operation, label="AUTHORIZING")
 
     @staticmethod
     def attachment_conflict(state) -> str | None:

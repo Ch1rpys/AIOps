@@ -262,3 +262,9 @@ def test_failed_experiment_is_recorded_not_dropped(client, world):
     assert arm["errors"] >= 1
     assert arm["valid_runs"] == 0
     assert arm["accuracy"] is None
+
+
+def test_capability_check_runs_once_per_experiment(client, world):
+    """一次实验只核验一次版本与工具权限：否则单臂最坏耗时突破 45 秒预算。"""
+    trigger(client)
+    assert world.capability_checks == 1

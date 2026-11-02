@@ -103,3 +103,37 @@ def test_only_registered_checks_can_be_requested():
     CheckRequest(check_id="nginx_hello", reason="看代理")
     with pytest.raises(ValueError):
         CheckRequest(check_id="docker exec", reason="自由发挥")
+
+
+def test_supplement_runs_when_the_model_says_evidence_is_insufficient(client, world):
+    """模型说「证据不足」正是它要补采的理由：补采必须真的能发生。
+
+    补采之前就做执行许可校验的话，这里会直接 EVIDENCE_INSUFFICIENT 收尾，
+    补采机制永远等不到机会（§6.2）。
+    """
+    world.requested_checks = [[{"check_id": "app_health", "reason": "需要确认应用健康"}]]
+    world.evidence_sufficient = False
+    incident_id = injected(client)
+    client.post(f"/api/incidents/{incident_id}/diagnose")
+    item = detail(client, incident_id)
+    # 补采发生了：模型被重新问了一次。
+    assert len(world.diagnosis_contexts) == 2
+    assert item["detail"]["supplement"]["requested"] == [
+        {"check_id": "app_health", "reason": "需要确认应用健康"}
+    ]
+    # 补采后模型仍然自认证据不足 → 执行许可门禁照样拦下，不放行到审批页。
+    assert item["status"] == "UNKNOWN"
+    assert item["detail"]["error"]["code"] == "EVIDENCE_INSUFFICIENT"
+    assert "plan_id" not in item["detail"]
+
+
+def test_supplement_then_sufficient_diagnosis_reaches_approval(client, world):
+    """补采后模型改判证据充分 → 正常进入审批，门禁没有放松。"""
+    world.requested_checks = [[{"check_id": "app_health", "reason": "需要确认应用健康"}]]
+    world.evidence_sufficient = False
+    incident_id = injected(client)
+    client.post(f"/api/incidents/{incident_id}/diagnose")
+    item = detail(client, incident_id)
+    assert item["status"] == "UNKNOWN"
+    assert item["detail"]["error"]["code"] == "EVIDENCE_INSUFFICIENT"
+    assert item["detail"]["supplement"]["round"] == 1

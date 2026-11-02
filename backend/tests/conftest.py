@@ -54,6 +54,7 @@ class TestWorld:
         self.diagnosis_contexts = []
         self.evidence_sufficient = True
         self.blind_contexts = []
+        self.capability_checks = 0
         self.blind_error = None
         self.blind_review_error = None
         self.blind_root_cause = "MYSQL_SERVICE_STOPPED"
@@ -174,7 +175,12 @@ class TestWorld:
             expected_checks=["mysql_select_1", "app_db_check"],
         )
 
-    def diagnose_domain(self, context, required_ids=None, timeout=None, trace=None):
+    def ensure_capabilities(self):
+        self.capability_checks += 1
+
+    def diagnose_domain(
+        self, context, required_ids=None, timeout=None, trace=None, verify_capabilities=True
+    ):
         self.blind_contexts.append(context)
         if self.blind_error:
             raise self.blind_error
@@ -191,7 +197,9 @@ class TestWorld:
             trace.usage = None
         return diagnosis
 
-    def review_domain(self, context, required_ids=None, timeout=None, trace=None):
+    def review_domain(
+        self, context, required_ids=None, timeout=None, trace=None, verify_capabilities=True
+    ):
         self.blind_contexts.append(context)
         if self.blind_review_error:
             raise self.blind_review_error

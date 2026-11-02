@@ -1,3 +1,4 @@
+import math
 import time
 from collections.abc import Callable
 
@@ -160,11 +161,17 @@ class Probes:
         失败次数与「恢复不稳定」标记；失败采样不会被删除。
         """
         window_enabled = self.settings.verification_window_enabled
-        limit = (
-            self.settings.verification_window_samples
-            if window_enabled
-            else self.settings.verification_attempts
-        )
+        interval = max(self.settings.verification_interval, 0.1)
+        if window_enabled:
+            # 观察窗口必须真的能被采满：样本数下限之外，还要够覆盖窗口时长，
+            # 否则「窗口秒数」只是一个永远达不到的条件（死参数）。
+            needed = (
+                math.ceil(self.settings.verification_window_seconds / interval)
+                + self.settings.verification_required_passes
+            )
+            limit = max(self.settings.verification_window_samples, needed)
+        else:
+            limit = self.settings.verification_attempts
         samples: list[list[Probe]] = []
         failures = 0
         consecutive = 0

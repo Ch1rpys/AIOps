@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import (
@@ -242,16 +243,44 @@ class Store:
 
     def evaluation_busy(self) -> bool:
         with self.session() as session:
-            return session.get(EvaluationLease, 1) is not None
+            lease = session.get(EvaluationLease, 1)
+            if lease is None:
+                return False
+            if self.lease_expired(lease):
+                # 进程崩在 acquire 与 release 之间时，租约会永久锁死工作台；
+                # 过期租约直接作废，不要求操作者手改数据库。
+                session.delete(lease)
+                return False
+            return True
+
+    @staticmethod
+    def lease_expired(lease: EvaluationLease, ttl_seconds: int = 900) -> bool:
+        try:
+            acquired = datetime.fromisoformat(lease.acquired_at)
+        except (TypeError, ValueError):
+            return True
+        if acquired.tzinfo is None:
+            acquired = acquired.replace(tzinfo=UTC)
+        return (datetime.now(UTC) - acquired).total_seconds() > ttl_seconds
 
     def lab_busy(self) -> bool:
         with self.session() as session:
             return session.get(LabLease, 1) is not None
 
+    def clear_expired_leases(self) -> None:
+        """清掉过期租约（评测租约与工作台租约）。"""
+        with self.session() as session, session.begin():
+            lease = session.get(EvaluationLease, 1)
+            if lease is not None and self.lease_expired(lease):
+                session.delete(lease)
+
     def acquire_evaluation_lease(self, holder: str) -> None:
         with self.session() as session, session.begin():
-            if session.get(EvaluationLease, 1) is not None:
-                raise DomainError("EVALUATION_BUSY", "评测进行中，请等待当前评测结束", 409)
+            lease = session.get(EvaluationLease, 1)
+            if lease is not None:
+                if not self.lease_expired(lease):
+                    raise DomainError("EVALUATION_BUSY", "评测进行中，请等待当前评测结束", 409)
+                session.delete(lease)
             if session.get(LabLease, 1) is not None:
                 raise DomainError(
                     "LAB_BUSY", "工作台实验进行中，请先完成或重置当前实验后再评测", 409
@@ -372,6 +401,7 @@ class Store:
                     "latency_total_ms": 0,
                     "latency_samples": 0,
                     "model_calls_total": 0,
+                    "model_calls_samples": 0,
                     "extra_collects_total": 0,
                     # §9.2：时间必须拆分开显示。
                     "model_ms_total": 0,
@@ -410,6 +440,7 @@ class Store:
                 bucket["latency_samples"] += 1
             if item.model_calls is not None:
                 bucket["model_calls_total"] += item.model_calls
+                bucket["model_calls_samples"] += 1
             if status == "BUDGET_EXCEEDED":
                 bucket["budget_exceeded"] += 1
                 continue
@@ -446,7 +477,13 @@ class Store:
                     "avg_latency_ms": (
                         round(bucket["latency_total_ms"] / samples) if samples else None
                     ),
-                    "model_calls_avg": round(calls / bucket["runs"], 2) if bucket["runs"] else None,
+                    # 分母只算「知道调用次数」的样本：未知不能当 0 摊进平均。
+                    "model_calls_avg": (
+                        round(calls / bucket["model_calls_samples"], 2)
+                        if bucket["model_calls_samples"]
+                        else None
+                    ),
+                    "model_calls_unknown": bucket["runs"] - bucket["model_calls_samples"],
                     "timing": {
                         "model_ms": (
                             round(bucket["model_ms_total"] / timings) if timings else None
