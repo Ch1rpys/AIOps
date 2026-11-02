@@ -187,3 +187,38 @@ def test_report_states_each_arm_input():
     assert "## 各臂输入" in report
     assert "纯文本证据" in report
     assert "视觉证据" in report
+
+
+def test_acceptance_run_exports_every_artifact(tmp_path):
+    """§3.2 每轮要保存：工单报告、结论、审计记录、模型原始输出。"""
+    spec = importlib.util.spec_from_file_location(
+        "run_acceptance", ROOT / "scripts/run_acceptance.py"
+    )
+    run_acceptance = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(run_acceptance)
+    item = {
+        "status": "RESOLVED",
+        "records": [
+            {
+                "kind": "step",
+                "payload": {
+                    "phase": "DIAGNOSING",
+                    "output": {"diagnosis": {"root_cause": "MYSQL_SERVICE_STOPPED"}},
+                },
+            }
+        ],
+        "detail": {
+            "raw_model_output": '{"root_cause": "MYSQL_SERVICE_STOPPED"}',
+            "model_usage": {"total_tokens": 42},
+        },
+    }
+    exported = run_acceptance.export_run(tmp_path, "inc_x", item, "# 报告")
+    assert exported["diagnosis"] == {"root_cause": "MYSQL_SERVICE_STOPPED"}
+    assert (tmp_path / "inc_x.md").read_text(encoding="utf-8") == "# 报告"
+    assert (tmp_path / "inc_x.records.json").exists()
+    raw = json.loads((tmp_path / "inc_x.model-output.json").read_text(encoding="utf-8"))
+    assert raw["raw_model_output"] == '{"root_cause": "MYSQL_SERVICE_STOPPED"}'
+    assert raw["model_usage"] == {"total_tokens": 42}
+    assert json.loads((tmp_path / "inc_x.diagnosis.json").read_text(encoding="utf-8")) == {
+        "root_cause": "MYSQL_SERVICE_STOPPED"
+    }

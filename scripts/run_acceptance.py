@@ -30,6 +30,42 @@ CONFIRM_WORDS = {
 TERMINAL = {"RESOLVED", "CANCELLED", "ERROR", "FAILED", "UNKNOWN", "BLOCKED"}
 
 
+def export_run(folder: Path, incident_id: str, item: dict, markdown: str) -> dict:
+    """导出一轮验收的全部产物（§3.2）：报告、结论、审计记录、模型原始输出。"""
+    folder.mkdir(parents=True, exist_ok=True)
+    diagnosis = extract_diagnosis(item)
+    report_path = folder / f"{incident_id}.md"
+    report_path.write_text(markdown, encoding="utf-8")
+    # 审计记录一并导出：每轮的采集、模型、审批、执行都要能复查。
+    records_path = folder / f"{incident_id}.records.json"
+    records_path.write_text(
+        json.dumps(item.get("records", []), ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    diagnosis_path = folder / f"{incident_id}.diagnosis.json"
+    diagnosis_path.write_text(json.dumps(diagnosis, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 模型原始输出单独留痕：模型说了什么，而不是我们解析后的结论。
+    raw_path = folder / f"{incident_id}.model-output.json"
+    raw_path.write_text(
+        json.dumps(
+            {
+                "raw_model_output": (item["detail"] or {}).get("raw_model_output"),
+                "model_usage": (item["detail"] or {}).get("model_usage"),
+                "diagnosis": diagnosis,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return {
+        "diagnosis": diagnosis,
+        "report_path": report_path,
+        "diagnosis_path": diagnosis_path,
+        "records_path": records_path,
+        "model_output_path": raw_path,
+    }
+
+
 def extract_diagnosis(item: dict) -> dict | None:
     """从审计记录里取出模型原始结论（不做美化，不改写）。"""
     for record in reversed(item.get("records", [])):
