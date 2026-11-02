@@ -212,16 +212,17 @@ def render_review_markdown(review: dict) -> str:
     if not (plan or approval or execution):
         lines.append("- 本次没有经过审批的执行动作。")
     lines.extend(["", "## 修复前后探针", ""])
+    before = review.get("probes_before") or []
+    after = review.get("probes_after") or []
     lines.append("修复前：")
-    lines.extend(
-        f"- {probe.get('name')}：{probe.get('verdict')}"
-        for probe in review.get("probes_before") or []
-    )
+    lines.extend(f"- {probe.get('name')}：{probe.get('verdict')}" for probe in before)
+    if not before:
+        lines.append("- 无采样")
     lines.append("修复后：")
-    lines.extend(
-        f"- {probe.get('name')}：{probe.get('verdict')}"
-        for probe in review.get("probes_after") or []
-    )
+    lines.extend(f"- {probe.get('name')}：{probe.get('verdict')}" for probe in after)
+    if not after:
+        # 没复测就说没复测：空着会被读成「都健康」。
+        lines.append("- 无复测采样（本次没有走到复测）")
     lines.extend(["", "## 未解决项", ""])
     unresolved = review.get("unresolved") or []
     if unresolved:

@@ -168,3 +168,11 @@ def test_relation_kinds_hold_in_more_than_one_scenario(
     startup = [edge for edge in graph["edges"] if edge["kind"] == CONFIGURED]
     assert startup
     assert all(edge["inferred"] is False for edge in startup)
+
+
+def test_review_markdown_says_when_there_was_no_verification(client, world):
+    """没走到复测就要写明没复测：空着会被读成「都健康」。"""
+    incident_id = injected(client)
+    markdown = client.get(f"/api/incidents/{incident_id}/review.md").text
+    assert "修复后：" in markdown
+    assert "无复测采样" in markdown
