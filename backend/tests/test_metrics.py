@@ -50,6 +50,14 @@ def test_pure_diagnosis_metrics_stay_not_applicable(client):
     assert any("不记 0" in note for note in summary(client)["notes"])
 
 
+def test_summary_notes_state_the_honesty_limits(client):
+    notes = " ".join(summary(client)["notes"])
+    assert "复现基线" in notes
+    assert "统计显著性" in notes
+    assert "假设空间" in notes
+    assert "不适用" in notes
+
+
 def test_time_is_split_by_phase(client, world):
     trigger = client.post(
         "/api/evaluation/runs",
