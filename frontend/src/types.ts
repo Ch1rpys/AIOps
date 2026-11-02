@@ -273,6 +273,7 @@ export interface EvaluationArmSummary {
     restore_ms: number | null;
     approval_ms: number | null;
     approval_applicable: boolean;
+    experiment_total_ms: number | null;
   };
   token_usage_total: number | null;
   token_usage_known: number;

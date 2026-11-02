@@ -218,7 +218,15 @@ class EvaluationService:
             "container_ms": timings["container_ms"],
             "restore_ms": timings["restore_ms"],
             "approval_ms": None,
+            # 臂内耗时：只含该臂自己的模型调用。
             "total_ms": budget.elapsed_ms,
+            # 实验总耗时：加上两臂共用的快照采集与容器启停，避免被误读成「整个实验只要 1ms」。
+            "experiment_total_ms": (
+                budget.elapsed_ms
+                + timings["collect_ms"]
+                + timings["container_ms"]
+                + timings["restore_ms"]
+            ),
         }
         record["approval_applicable"] = False
         record["lab_restored"] = timings["lab_restored"]

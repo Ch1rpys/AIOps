@@ -378,6 +378,7 @@ class Store:
                     "collect_ms_total": 0,
                     "container_ms_total": 0,
                     "restore_ms_total": 0,
+                    "experiment_total_ms_total": 0,
                     "timing_samples": 0,
                     "token_usage_known": 0,
                     "token_usage_total": 0,
@@ -394,6 +395,9 @@ class Store:
                 bucket["collect_ms_total"] += int(timing.get("collect_ms", 0) or 0)
                 bucket["container_ms_total"] += int(timing.get("container_ms", 0) or 0)
                 bucket["restore_ms_total"] += int(timing.get("restore_ms", 0) or 0)
+                bucket["experiment_total_ms_total"] += int(
+                    timing.get("experiment_total_ms", 0) or 0
+                )
             usage = item.token_usage
             if isinstance(usage, dict) and usage:
                 bucket["token_usage_known"] += 1
@@ -459,6 +463,11 @@ class Store:
                         # 纯诊断对照没有审批环节：不适用，不是 0。
                         "approval_ms": None,
                         "approval_applicable": False,
+                        "experiment_total_ms": (
+                            round(bucket["experiment_total_ms_total"] / timings)
+                            if timings
+                            else None
+                        ),
                     },
                     "token_usage_total": token_total,
                     "token_usage_known": bucket["token_usage_known"],

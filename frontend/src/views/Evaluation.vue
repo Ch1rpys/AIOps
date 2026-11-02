@@ -200,7 +200,7 @@ onUnmounted(() => {
             <th>有效样本</th>
             <th>根因正确率</th>
             <th>拒答率</th>
-            <th>平均耗时</th>
+            <th>平均耗时（臂内）</th>
             <th>平均模型调用</th>
             <th>token 用量</th>
             <th>错误处置提议数</th>
@@ -236,6 +236,7 @@ onUnmounted(() => {
             <th>采证时间</th>
             <th>容器停止</th>
             <th>容器恢复</th>
+            <th>实验总耗时</th>
             <th>人工审批等待</th>
           </tr>
         </thead>
@@ -246,6 +247,7 @@ onUnmounted(() => {
             <td>{{ ms(arm.timing.collect_ms) }}</td>
             <td>{{ ms(arm.timing.container_ms) }}</td>
             <td>{{ ms(arm.timing.restore_ms) }}</td>
+            <td>{{ ms(arm.timing.experiment_total_ms) }}</td>
             <td class="muted">不适用</td>
           </tr>
         </tbody>

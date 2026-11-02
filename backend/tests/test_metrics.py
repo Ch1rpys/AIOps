@@ -66,6 +66,7 @@ def test_time_is_split_by_phase(client, world):
         "restore_ms",
         "approval_ms",
         "approval_applicable",
+        "experiment_total_ms",
     }
     # 纯诊断对照没有审批环节：不适用，不是 0。
     assert timing["approval_ms"] is None
@@ -73,6 +74,8 @@ def test_time_is_split_by_phase(client, world):
     assert timing["model_ms"] is not None
     assert timing["collect_ms"] is not None
     assert timing["container_ms"] is not None
+    # 实验总耗时要把共用的采集与容器启停算进去，不能被误读成「整个实验只要几毫秒」。
+    assert timing["experiment_total_ms"] >= timing["collect_ms"]
 
 
 def test_token_usage_is_unknown_when_not_returned(client, world):
