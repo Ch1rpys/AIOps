@@ -77,7 +77,11 @@ class EvaluationRun(Base):
 
 
 class EvaluationArm(Base):
-    """同一 snapshot 下各臂的配置快照，保证 A/B/C 的可比性可复查。"""
+    """同一 snapshot 下各臂的配置快照，保证 A/B/C 的可比性可复查。
+
+    `snapshot_hash` 指的是**文本证据快照**：A/B 只看它，C 臂在同一份快照之外
+    额外加入视觉证据（§4.5），该差异记在运行记录的 `visual_evidence_ids` 里。
+    """
 
     __tablename__ = "evaluation_arms"
     id: Mapped[str] = mapped_column(String, primary_key=True)
