@@ -420,13 +420,19 @@ class Store:
             timing = diagnosis.get("timing") or {}
             if timing:
                 bucket["timing_samples"] += 1
-                bucket["model_ms_total"] += int(timing.get("model_ms", 0) or 0)
-                bucket["collect_ms_total"] += int(timing.get("collect_ms", 0) or 0)
-                bucket["container_ms_total"] += int(timing.get("container_ms", 0) or 0)
-                bucket["restore_ms_total"] += int(timing.get("restore_ms", 0) or 0)
-                bucket["experiment_total_ms_total"] += int(
-                    timing.get("experiment_total_ms", 0) or 0
-                )
+                model_ms = int(timing.get("model_ms", 0) or 0)
+                collect_ms = int(timing.get("collect_ms", 0) or 0)
+                container_ms = int(timing.get("container_ms", 0) or 0)
+                restore_ms = int(timing.get("restore_ms", 0) or 0)
+                bucket["model_ms_total"] += model_ms
+                bucket["collect_ms_total"] += collect_ms
+                bucket["container_ms_total"] += container_ms
+                bucket["restore_ms_total"] += restore_ms
+                # 实验总耗时：优先用落库值，没有就按各阶段相加（早期记录没有这个字段）。
+                experiment_total = timing.get("experiment_total_ms")
+                if experiment_total is None:
+                    experiment_total = model_ms + collect_ms + container_ms + restore_ms
+                bucket["experiment_total_ms_total"] += int(experiment_total)
             usage = item.token_usage
             if isinstance(usage, dict) and usage:
                 bucket["token_usage_known"] += 1
