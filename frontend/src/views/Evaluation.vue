@@ -13,6 +13,7 @@ import {
 } from '../display';
 import type {
   EvaluationArm,
+  EvaluationArmSummary,
   EvaluationRunDetail,
   EvaluationRunRow,
   EvaluationSummary,
@@ -64,6 +65,15 @@ function tokenCell(total: number | null, known: number, partial = 0): string {
     return partial ? `未知（${partial} 条仅部分已知）` : '未知';
   }
   return `${total}（${known} 条有 usage${partial ? `，${partial} 条仅部分已知` : ''}）`;
+}
+
+function excludedText(arm: EvaluationArmSummary): string {
+  // 剔除了哪些样本要写清楚：分母不能悄悄变小。
+  const parts: string[] = [];
+  if (arm.invalid_runs) parts.push(`${arm.invalid_runs} 次故障未成立`);
+  if (arm.errors) parts.push(`${arm.errors} 次错误`);
+  if (arm.budget_exceeded) parts.push(`${arm.budget_exceeded} 次超限`);
+  return parts.join('、');
 }
 
 function truthCell(row: EvaluationRunRow): string {
@@ -272,9 +282,9 @@ onUnmounted(() => {
             <td>{{ armLabel[arm.arm] }}</td>
             <td>
               {{ arm.valid_runs }} / {{ arm.runs }}
-              <span v-if="arm.invalid_runs" class="muted text-12">
-                （{{ arm.invalid_runs }} 次故障未成立，已剔除）
-              </span>
+              <div v-if="excludedText(arm)" class="muted text-12">
+                （{{ excludedText(arm) }}，已剔除）
+              </div>
             </td>
             <td>{{ percent(arm.accuracy) }}</td>
             <td>{{ percent(arm.rejection_rate) }}</td>
