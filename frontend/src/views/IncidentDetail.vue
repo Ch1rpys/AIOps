@@ -698,16 +698,16 @@ onUnmounted(() => {
                     </span>
                   </td>
                   <td class="text-12">
-                    <span v-for="probe in node.probes" :key="probe.name" class="mono">
+                    <div v-for="probe in node.probes" :key="probe.name" class="mono">
                       {{ probe.name }}={{ probe.verdict }}
-                    </span>
+                    </div>
                     <span v-if="!node.probes.length" class="muted">—</span>
                   </td>
                   <td class="text-12">{{ node.diagnosis_evidence_ids?.length ?? 0 }} 条</td>
                   <td class="muted text-12">
-                    <span v-for="(line, index) in node.logs ?? []" :key="index">
+                    <div v-for="(line, index) in node.logs ?? []" :key="index">
                       {{ line.slice(0, 80) }}
-                    </span>
+                    </div>
                     <span v-if="!(node.logs ?? []).length">—</span>
                   </td>
                 </tr>
