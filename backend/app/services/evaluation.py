@@ -263,12 +263,22 @@ class EvaluationService:
                 raise DomainError(
                     "EVALUATION_ATTACHMENT_NOT_FOUND", f"截图不存在：{attachment_id}", 404
                 )
+            # 只把与观测有关的字段放进模型载荷：存储路径、摘要、审核时间戳
+            # 这些是后台细节，不该出现在模型眼前。完整元信息在附件自己的记录里。
             items.append(
                 Evidence(
                     id=f"evidence_{attachment_id}",
                     source=f"attachment:{attachment.get('filename', attachment_id)}",
                     kind="attachment",
-                    raw=attachment,
+                    raw={
+                        "filename": attachment.get("filename"),
+                        "observed_at": attachment.get("observed_at"),
+                        "observed_at_known": attachment.get("observed_at_known"),
+                        "extracted_text": attachment.get("extracted_text", ""),
+                        "anomalies": attachment.get("anomalies") or [],
+                        "uncertain": attachment.get("uncertain") or [],
+                        "model": attachment.get("model"),
+                    },
                     captured_at=now(),
                 )
             )

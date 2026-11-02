@@ -377,3 +377,38 @@ def test_c_arm_runs_on_the_same_snapshot_with_visual_evidence(client, world):
     attachment = next(item for item in items if item["kind"] == "attachment")
     # 视觉观测确实进了快照：模型看到的是截图里的异常，不是空壳。
     assert attachment["raw"]["anomalies"][0]["description"] == "数据库错误页"
+
+
+def test_c_arm_payload_carries_only_the_observation(client, world):
+    """模型载荷里只应有观测本身：存储路径、摘要这类后台细节不进上下文。"""
+    world.vision_observation = VisionObservation(
+        observed_at="2026-11-02T10:00:00",
+        extracted_text="503 Service Unavailable",
+        anomalies=[VisionAnomaly(description="数据库错误页", region=[], text="503")],
+    )
+    upload = client.post(
+        "/api/evaluation/attachments",
+        json={
+            "filename": "error-page.png",
+            "content_base64": base64.b64encode(PNG_BYTES).decode("ascii"),
+            "note": "故障时刻的截图",
+        },
+    )
+    attachment_id = upload.json()["id"]
+    trigger(client, arms=("C",), key="TEST-eval-c-payload", attachment_ids=[attachment_id])
+    rows = runs(client, limit=5)
+    detail = client.get(f"/api/evaluation/runs/{rows[0]['id']}").json()
+    attachment = next(item for item in detail["evidence"]["items"] if item["kind"] == "attachment")
+    assert set(attachment["raw"]) == {
+        "filename",
+        "observed_at",
+        "observed_at_known",
+        "extracted_text",
+        "anomalies",
+        "uncertain",
+        "model",
+    }
+    assert "storage" not in attachment["raw"]
+    assert "sha256" not in attachment["raw"]
+    # 截图里识别到的异常确实进了快照。
+    assert attachment["raw"]["anomalies"][0]["description"] == "数据库错误页"
