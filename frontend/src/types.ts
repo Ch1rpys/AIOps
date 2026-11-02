@@ -116,7 +116,22 @@ export interface Incident extends IncidentSummary {
     plan?: Plan;
     diagnosis?: Diagnosis;
     error?: { code: string; message: string };
-    verification?: { verdict: Verdict; samples: Probe[][]; captured_at: string };
+    verification?: {
+      verdict: Verdict;
+      samples: Probe[][];
+      captured_at: string;
+      /** M5 连续健康窗口：未启用时为 null。 */
+      window?: {
+        enabled: boolean;
+        required_passes: number;
+        window_seconds: number;
+        samples: number;
+        failures: number;
+        consecutive_passes: number;
+        instability: boolean;
+        stable: boolean;
+      } | null;
+    };
     /** M3：受限主动补采。 */
     supplement?: SupplementRecord;
     supplement_stopped?: string;

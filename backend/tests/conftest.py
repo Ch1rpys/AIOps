@@ -58,6 +58,8 @@ class TestWorld:
         self.review_root_cause = "MYSQL_SERVICE_STOPPED"
         self.requested_checks: list[list[dict]] = []
         self.candidates: list[dict] = []
+        self.window_enabled = False
+        self.window_instability = False
 
     @property
     def stopped(self) -> bool:
@@ -121,7 +123,19 @@ class TestWorld:
             for name in ("mysql_select_1", "app_db_check")
         ]
         on_sample(probes)
-        return Verification(verdict=verdict, samples=[probes])
+        window = None
+        if self.window_enabled:
+            window = {
+                "enabled": True,
+                "required_passes": 1,
+                "window_seconds": 0,
+                "samples": 1,
+                "failures": 1 if self.window_instability else 0,
+                "consecutive_passes": 1,
+                "instability": self.window_instability,
+                "stable": not self.window_instability,
+            }
+        return Verification(verdict=verdict, samples=[probes], window=window)
 
     def diagnose(self, context):
         self.diagnosis_contexts.append(context)

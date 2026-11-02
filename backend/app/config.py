@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     supplement_budget_seconds: int = Field(default=45, ge=5, le=300)
     verification_attempts: int = Field(default=5, ge=1, le=5)
     verification_interval: float = Field(default=3, ge=0, le=5)
+    # M5 连续健康窗口：默认关闭，关闭时判定与现状逐字一致。
+    verification_window_enabled: bool = False
+    verification_window_samples: int = Field(default=5, ge=1, le=20)
+    verification_required_passes: int = Field(default=3, ge=1, le=10)
+    verification_window_seconds: int = Field(default=30, ge=1, le=300)
     fault_confirmation_attempts: int = Field(default=3, ge=1, le=5)
     fault_confirmation_interval: float = Field(default=2, ge=0, le=5)
     log_lines: int = Field(default=60, ge=1, le=100)

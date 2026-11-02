@@ -213,6 +213,9 @@ class Verification(StrictModel):
     verdict: Verdict
     samples: list[list[Probe]]
     captured_at: str = Field(default_factory=now)
+    # M5 连续健康窗口：None = 未启用窗口（默认关闭，行为与现状一致）。
+    # 「恢复不稳定」由 window.instability 表达，verdict 仍是 PASS/FAIL/UNKNOWN 三值。
+    window: dict | None = None
 
 
 class IncidentView(StrictModel):

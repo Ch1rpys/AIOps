@@ -153,13 +153,59 @@ class Probes:
     def verify(
         self, on_sample: Callable[[list[Probe]], None], scenario: Scenario = Scenario.MYSQL_DOWN
     ) -> Verification:
-        samples = []
-        for index in range(self.settings.verification_attempts):
+        """复测采样。
+
+        默认关闭窗口时行为与现状完全一致：一次完整采样 PASS 即结束。
+        开启窗口时按「连续健康次数 + 观察窗口」判定，并在 window 里记录
+        失败次数与「恢复不稳定」标记；失败采样不会被删除。
+        """
+        window_enabled = self.settings.verification_window_enabled
+        limit = (
+            self.settings.verification_window_samples
+            if window_enabled
+            else self.settings.verification_attempts
+        )
+        samples: list[list[Probe]] = []
+        failures = 0
+        consecutive = 0
+        started = time.monotonic()
+        for index in range(limit):
             if index:
                 time.sleep(self.settings.verification_interval)
             sample = self.for_scenario(scenario)
             samples.append(sample)
             on_sample(sample)
-            if judge(sample, scenario) == Verdict.PASS:
+            verdict = judge(sample, scenario)
+            if verdict == Verdict.FAIL:
+                failures += 1
+                consecutive = 0
+            elif verdict == Verdict.PASS:
+                consecutive += 1
+            else:
+                # 暂时未知不是失败，也不能当作连续健康。
+                consecutive = 0
+            if not window_enabled:
+                if verdict == Verdict.PASS:
+                    break
+                continue
+            # 窗口模式不在首次失败时停止：只有看到「失败之后又恢复」才算得出「恢复不稳定」。
+            if (
+                consecutive >= self.settings.verification_required_passes
+                and time.monotonic() - started >= self.settings.verification_window_seconds
+            ):
                 break
-        return Verification(verdict=judge(samples[-1], scenario), samples=samples)
+        window = None
+        if window_enabled:
+            window = {
+                "enabled": True,
+                "required_passes": self.settings.verification_required_passes,
+                "window_seconds": self.settings.verification_window_seconds,
+                "samples": len(samples),
+                "failures": failures,
+                "consecutive_passes": consecutive,
+                # 窗口内再次失败：恢复不稳定。verdict 语义不变，由这个标记表达。
+                "instability": failures > 0,
+                "stable": failures == 0
+                and consecutive >= self.settings.verification_required_passes,
+            }
+        return Verification(verdict=judge(samples[-1], scenario), samples=samples, window=window)

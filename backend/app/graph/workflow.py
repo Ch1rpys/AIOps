@@ -400,7 +400,12 @@ class Workflow:
         if state.get("error"):
             return END
         verdict = state["verification"]["verdict"]
-        if verdict == Verdict.FAIL and state["attempt"] < 2:
+        window = state["verification"].get("window") or {}
+        # M5：窗口内再次失败说明恢复不稳定，不能算已恢复；
+        # 窗口默认关闭时 instability 恒为 False，判定与现状逐字一致。
+        unstable = bool(window.get("instability"))
+        effective = Verdict.FAIL if (verdict == Verdict.PASS and unstable) else verdict
+        if effective == Verdict.FAIL and state["attempt"] < 2:
             return "collect_retry"
         self.phase(
             state,
@@ -408,6 +413,6 @@ class Workflow:
                 Verdict.PASS: Status.RESOLVED,
                 Verdict.FAIL: Status.FAILED,
                 Verdict.UNKNOWN: Status.UNKNOWN,
-            }[verdict],
+            }[effective],
         )
         return END
