@@ -511,6 +511,11 @@ async function run() {
       // 纯诊断对照不评估处置提议与拦截率：必须显示「不适用」，不能显示 0。
       assert.ok(comparison.includes("不适用"), "proposal metrics must be not applicable");
       assert.ok(comparison.includes("统计显著性"), "honesty note must be shown");
+      // 耗时必须按阶段拆分显示；审批等待在纯诊断下标「不适用」。
+      assert.ok(comparison.includes("模型时间"), "model time must be split out");
+      assert.ok(comparison.includes("采证时间"), "collection time must be split out");
+      assert.ok(comparison.includes("人工审批等待"), "approval wait must be listed");
+      assert.ok(comparison.includes("token 用量"), "token usage must be listed");
       // 默认不显示真值列。
       const records = cards.find((text) => text.includes("实验记录"));
       assert.ok(records, "records card must exist");

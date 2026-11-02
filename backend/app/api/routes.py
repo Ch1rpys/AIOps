@@ -17,6 +17,7 @@ from app.schemas.domain import (
     Scenario,
     Status,
 )
+from app.services.metrics import end_to_end_summary
 from app.services.review import build_review, incident_impact_graph, render_review_markdown
 
 router = APIRouter(prefix="/api")
@@ -289,7 +290,10 @@ def list_evaluation_runs(
 
 @router.get("/evaluation/summary")
 def evaluation_summary(service=Depends(evaluation)):
-    return service.store.evaluation_summary()
+    """纯诊断对照与端到端对照的指标分开呈现，不混为一谈。"""
+    summary = service.store.evaluation_summary()
+    summary["end_to_end"] = end_to_end_summary(service.store)
+    return summary
 
 
 @router.get("/evaluation/runs/{run_id}")

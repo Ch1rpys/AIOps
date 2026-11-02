@@ -50,6 +50,17 @@ function percent(value: number | null): string {
   return `${(value * 100).toFixed(1)}%`;
 }
 
+function ms(value: number | null | undefined): string {
+  if (value === null || value === undefined) return '未知';
+  return value < 1000 ? `${value} ms` : `${(value / 1000).toFixed(1)} 秒`;
+}
+
+function tokenCell(total: number | null, known: number): string {
+  // token 未返回就标「未知」，不用 0 顶替。
+  if (total === null) return '未知';
+  return `${total}（${known} 条有 usage）`;
+}
+
 function truthCell(row: EvaluationRunRow): string {
   if (!evaluationView.value) return '不显示';
   if (row.truth_scenario) return scenarioName(row.truth_scenario);
@@ -191,6 +202,7 @@ onUnmounted(() => {
             <th>拒答率</th>
             <th>平均耗时</th>
             <th>平均模型调用</th>
+            <th>token 用量</th>
             <th>错误处置提议数</th>
             <th>拦截率</th>
           </tr>
@@ -208,12 +220,74 @@ onUnmounted(() => {
             <td>{{ percent(arm.rejection_rate) }}</td>
             <td>{{ durationLabel(arm.avg_latency_ms ?? undefined) }}</td>
             <td>{{ arm.model_calls_avg ?? '未知' }}</td>
+            <td>{{ tokenCell(arm.token_usage_total, arm.token_usage_known) }}</td>
             <td class="muted">不适用</td>
             <td class="muted">不适用</td>
           </tr>
         </tbody>
       </table>
     </div>
+    <div v-if="summary && summary.arms.length" class="table-scroll" style="margin-top: 12px">
+      <table class="probe-table">
+        <thead>
+          <tr>
+            <th>实验臂</th>
+            <th>模型时间</th>
+            <th>采证时间</th>
+            <th>容器停止</th>
+            <th>容器恢复</th>
+            <th>人工审批等待</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="arm in summary.arms" :key="`timing-${arm.arm}`">
+            <td>{{ arm.arm }}</td>
+            <td>{{ ms(arm.timing.model_ms) }}</td>
+            <td>{{ ms(arm.timing.collect_ms) }}</td>
+            <td>{{ ms(arm.timing.container_ms) }}</td>
+            <td>{{ ms(arm.timing.restore_ms) }}</td>
+            <td class="muted">不适用</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div v-if="summary && summary.end_to_end" class="section-heading" style="margin-top: 16px">
+      <h2>端到端对照（闭环路径）</h2>
+    </div>
+    <div v-if="summary && summary.end_to_end" class="filter-bar">
+      <span class="muted text-12">处置提议</span>
+      <span class="text-12">{{ summary.end_to_end.proposals }} 条</span>
+      <span class="muted text-12">错误处置提议数</span>
+      <span class="text-12">
+        {{ summary.end_to_end.illegal_proposals }} 条
+        {{
+          summary.end_to_end.illegal_proposal_rate === null
+            ? '（不适用）'
+            : `（${(summary.end_to_end.illegal_proposal_rate * 100).toFixed(1)}%）`
+        }}
+      </span>
+      <span class="muted text-12">拦截率</span>
+      <span class="text-12">
+        {{
+          summary.end_to_end.block_rate === null
+            ? '不适用'
+            : `${(summary.end_to_end.block_rate * 100).toFixed(1)}%`
+        }}
+      </span>
+      <span class="muted text-12">恢复成功率</span>
+      <span class="text-12">
+        {{
+          summary.end_to_end.recovery_success_rate === null
+            ? '不适用'
+            : `${(summary.end_to_end.recovery_success_rate * 100).toFixed(1)}%`
+        }}
+      </span>
+    </div>
+    <p v-if="summary && summary.end_to_end" class="help-text">
+      {{ summary.end_to_end.note }}
+    </p>
+
     <ul v-if="summary" class="help-text" style="margin-top: 10px">
       <li v-for="note in summary.notes" :key="note">{{ note }}</li>
     </ul>

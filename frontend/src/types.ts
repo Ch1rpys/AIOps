@@ -262,11 +262,39 @@ export interface EvaluationArmSummary {
   rejection_rate: number | null;
   avg_latency_ms: number | null;
   model_calls_avg: number | null;
+  /** §9.2：耗时按阶段拆分；审批等待在纯诊断下不适用。 */
+  timing: {
+    model_ms: number | null;
+    collect_ms: number | null;
+    container_ms: number | null;
+    restore_ms: number | null;
+    approval_ms: number | null;
+    approval_applicable: boolean;
+  };
+  token_usage_total: number | null;
+  token_usage_known: number;
+}
+
+export interface EndToEndSummary {
+  applicable: boolean;
+  incidents: number;
+  proposals: number;
+  illegal_proposals: number;
+  illegal_proposal_rate: number | null;
+  blocked_proposals: number;
+  block_rate: number | null;
+  executed: number;
+  recovery_success_rate: number | null;
+  model_calls: number;
+  model_calls_avg: number | null;
+  note: string;
 }
 
 export interface EvaluationSummary {
   arms: EvaluationArmSummary[];
   /** 纯诊断对照不评估处置提议与拦截率：显示「不适用」，不记 0。 */
   proposal_metrics_applicable: boolean;
+  /** 端到端（闭环）路径的处置提议与拦截指标。 */
+  end_to_end: EndToEndSummary;
   notes: string[];
 }

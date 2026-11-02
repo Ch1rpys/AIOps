@@ -6,15 +6,29 @@ from app.scenarios import SCENARIOS
 from app.schemas.domain import Action, Plan, Scenario, Status
 
 
-def validate_plan(plan: Plan, scenario: Scenario) -> None:
+def plan_violations(plan: Plan | dict, scenario: Scenario) -> list[str]:
+    """列出计划与场景注册表不符的地方；空列表表示合法。
+
+    评测指标要用它统计「错误处置提议数」（§9.1），
+    因此判定口径必须与门禁本身同源，不能另写一份。
+    """
     definition = SCENARIOS[scenario]
-    expected_target = "none" if plan.action_id == Action.NO_ACTION else definition.target
-    if (
-        plan.action_id not in {definition.action, Action.NO_ACTION}
-        or plan.target != expected_target
-        or len(plan.expected_checks) != len(definition.checks)
-        or set(plan.expected_checks) != set(definition.checks)
-    ):
+    data = plan if isinstance(plan, dict) else plan.model_dump(mode="json")
+    action = data.get("action_id")
+    expected_target = "none" if action == Action.NO_ACTION else definition.target
+    violations: list[str] = []
+    if action not in {definition.action, Action.NO_ACTION}:
+        violations.append(f"动作 {action} 不在场景白名单内")
+    if data.get("target") != expected_target:
+        violations.append(f"目标 {data.get('target')} 与场景不符")
+    expected = sorted(definition.checks)
+    if sorted(data.get("expected_checks") or []) != expected:
+        violations.append("探针集合与场景不符")
+    return violations
+
+
+def validate_plan(plan: Plan, scenario: Scenario) -> None:
+    if plan_violations(plan, scenario):
         raise DomainError("BLOCKED", "动作、场景、目标或探针不匹配")
 
 

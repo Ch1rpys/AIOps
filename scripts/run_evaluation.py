@@ -40,6 +40,11 @@ def ask_root_cause(prompt: str) -> str:
 
 
 def summarize_evidence(detail: dict) -> str:
+    """复核者看到的证据摘要：容器状态、探针观测与服务日志尾部。
+
+    只给观测，不给真值，也不给场景注册的检查清单，
+    否则人工复核会被答案锚定，失去独立判断的意义。
+    """
     items = (detail.get("evidence") or {}).get("items") or []
     lines = []
     for item in items:
@@ -51,13 +56,27 @@ def summarize_evidence(detail: dict) -> str:
             lines.append(f"容器状态：{states}")
         elif item.get("kind") == "probe":
             raw = item.get("raw") or {}
-            lines.append(f"探针 {raw.get('name')}：{raw.get('verdict')}")
+            observed = raw.get("observed") or {}
+            detail_text = observed.get("error") or observed.get("status_code") or ""
+            lines.append(
+                f"探针 {raw.get('name')}：{raw.get('verdict')}"
+                + (f" · {detail_text}" if detail_text else "")
+            )
+    for item in items:
+        if item.get("kind") != "logs":
+            continue
+        text = str((item.get("raw") or {}).get("text", ""))
+        tail = [line for line in text.splitlines() if line.strip()][-3:]
+        if tail:
+            lines.append(f"日志 {item.get('source')} 尾部：{tail[-1][:160]}")
+    lines.append(f"证据条数：{len(items)}")
     return "\n".join(lines)
 
 
-def render_markdown(transcript: dict) -> str:
+def render_markdown(transcript: dict, summary: dict | None = None) -> str:
     """评测报告：结论、消耗与人工复核结果全部保留，失败与拒答不美化。"""
     results = transcript.get("results", [])
+    summary = summary or {}
     arms_text = "、".join(transcript.get("arms", []))
     lines = [
         "# 盲诊评测报告",
@@ -83,8 +102,9 @@ def render_markdown(transcript: dict) -> str:
     )
     for item in results:
         lines.append(
-            "| {round} | {scenario} | {arm} | {root} | {sufficient} | {fault} | {correct} | "
-            "{rejected} | {calls} | {latency} | {review} |".format(
+            "| {run_id} | {round} | {scenario} | {arm} | {root} | {sufficient} | {fault} "
+            "| {correct} | {rejected} | {calls} | {latency} | {review} |".format(
+                run_id=item.get("run_id"),
                 round=item.get("round"),
                 scenario=item.get("scenario"),
                 arm=item.get("arm"),
@@ -98,6 +118,32 @@ def render_markdown(transcript: dict) -> str:
                 review="一致" if item.get("reviewer_matches_truth") else "不一致",
             )
         )
+    lines.extend(["", "## 耗时拆分（§9.2）", ""])
+    lines.append("| 实验臂 | 模型时间 | 采证时间 | 容器停止 | 容器恢复 | 人工审批等待 |")
+    lines.append("| --- | --- | --- | --- | --- | --- |")
+    for arm in summary.get("arms", []):
+        split = arm.get("timing") or {}
+        lines.append(
+            "| {arm} | {model} | {collect} | {container} | {restore} | {approval} |".format(
+                arm=arm.get("arm"),
+                model=split.get("model_ms"),
+                collect=split.get("collect_ms"),
+                container=split.get("container_ms"),
+                restore=split.get("restore_ms"),
+                approval="不适用",
+            )
+        )
+    lines.extend(["", "## 端到端对照（闭环路径）", ""])
+    end_to_end = summary.get("end_to_end") or {}
+    lines.append(f"- 处置提议：{end_to_end.get('proposals', 0)} 条")
+    lines.append(
+        f"- 错误处置提议数：{end_to_end.get('illegal_proposals', 0)} 条"
+        f"（{end_to_end.get('illegal_proposal_rate')}）"
+    )
+    blocked = end_to_end.get("blocked_proposals", 0)
+    lines.append(f"- 拦截率：{end_to_end.get('block_rate')}（{blocked} 条被拦下）")
+    lines.append(f"- 恢复成功率：{end_to_end.get('recovery_success_rate')}")
+    lines.append(f"- {end_to_end.get('note', '')}")
     lines.extend(["", "## 模型原始结论", ""])
     for item in results:
         lines.extend(
@@ -123,6 +169,7 @@ def run(rounds: int, arms: list[str], base_url: str, timeout_s: int) -> int:
     path = settings.data_dir / "evaluation" / f"blind-{uuid4().hex}.json"
     report_path = path.with_suffix(".md")
     path.parent.mkdir(parents=True, exist_ok=True)
+    summary: dict = {}
     transcript = {
         "mode": "REAL",
         "started_at": now(),
@@ -138,7 +185,7 @@ def run(rounds: int, arms: list[str], base_url: str, timeout_s: int) -> int:
 
     def save():
         path.write_text(json.dumps(transcript, ensure_ascii=False, indent=2), encoding="utf-8")
-        report_path.write_text(render_markdown(transcript), encoding="utf-8")
+        report_path.write_text(render_markdown(transcript, summary), encoding="utf-8")
 
     with httpx.Client(
         base_url=base_url,
@@ -165,6 +212,7 @@ def run(rounds: int, arms: list[str], base_url: str, timeout_s: int) -> int:
                 raise ValueError("demo 基线未全部通过，禁止评测")
             if not health["holmes"]["status"] == "PASS":
                 raise ValueError("HolmesGPT 服务未就绪，无法进行真实模型评测")
+            summary = call("GET", "/api/evaluation/summary")
             print("PASS REAL 基线与模型服务预检")
             for scenario in ("MYSQL_DOWN", "REDIS_DOWN", "NGINX_502"):
                 for index in range(rounds):
@@ -221,6 +269,7 @@ def run(rounds: int, arms: list[str], base_url: str, timeout_s: int) -> int:
                             "diagnosis": detail.get("diagnosis"),
                         }
                         transcript["results"].append(entry)
+                        summary = call("GET", "/api/evaluation/summary")
                         save()
                         print(f"系统判卷：{'正确' if row.get('correct') == 1 else '不正确'}")
                         agreement = "一致" if entry["reviewer_matches_truth"] else "不一致"

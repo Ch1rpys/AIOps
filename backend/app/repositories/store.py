@@ -373,12 +373,33 @@ class Store:
                     "latency_samples": 0,
                     "model_calls_total": 0,
                     "extra_collects_total": 0,
+                    # §9.2：时间必须拆分开显示。
+                    "model_ms_total": 0,
+                    "collect_ms_total": 0,
+                    "container_ms_total": 0,
+                    "restore_ms_total": 0,
+                    "timing_samples": 0,
+                    "token_usage_known": 0,
+                    "token_usage_total": 0,
                 },
             )
             bucket["runs"] += 1
             diagnosis = item.diagnosis_json or {}
             status = diagnosis.get("status", "COMPLETED")
             bucket["extra_collects_total"] += int(diagnosis.get("extra_collects", 0) or 0)
+            timing = diagnosis.get("timing") or {}
+            if timing:
+                bucket["timing_samples"] += 1
+                bucket["model_ms_total"] += int(timing.get("model_ms", 0) or 0)
+                bucket["collect_ms_total"] += int(timing.get("collect_ms", 0) or 0)
+                bucket["container_ms_total"] += int(timing.get("container_ms", 0) or 0)
+                bucket["restore_ms_total"] += int(timing.get("restore_ms", 0) or 0)
+            usage = item.token_usage
+            if isinstance(usage, dict) and usage:
+                bucket["token_usage_known"] += 1
+                bucket["token_usage_total"] += sum(
+                    value for value in usage.values() if isinstance(value, int)
+                )
             bucket["contract_violations"] += len(diagnosis.get("contract_violations", []) or [])
             if item.latency_ms is not None:
                 bucket["latency_total_ms"] += item.latency_ms
@@ -406,6 +427,13 @@ class Store:
             valid = bucket["valid_runs"]
             samples = bucket["latency_samples"]
             calls = bucket["model_calls_total"]
+            timings = bucket["timing_samples"]
+            # token 取不到就标「未知」，不用 0 顶替，也不做部分求和。
+            token_total = (
+                bucket["token_usage_total"]
+                if bucket["token_usage_known"] == bucket["runs"] and bucket["runs"]
+                else None
+            )
             result.append(
                 {
                     **bucket,
@@ -415,6 +443,25 @@ class Store:
                         round(bucket["latency_total_ms"] / samples) if samples else None
                     ),
                     "model_calls_avg": round(calls / bucket["runs"], 2) if bucket["runs"] else None,
+                    "timing": {
+                        "model_ms": (
+                            round(bucket["model_ms_total"] / timings) if timings else None
+                        ),
+                        "collect_ms": (
+                            round(bucket["collect_ms_total"] / timings) if timings else None
+                        ),
+                        "container_ms": (
+                            round(bucket["container_ms_total"] / timings) if timings else None
+                        ),
+                        "restore_ms": (
+                            round(bucket["restore_ms_total"] / timings) if timings else None
+                        ),
+                        # 纯诊断对照没有审批环节：不适用，不是 0。
+                        "approval_ms": None,
+                        "approval_applicable": False,
+                    },
+                    "token_usage_total": token_total,
+                    "token_usage_known": bucket["token_usage_known"],
                 }
             )
         return {
@@ -423,6 +470,7 @@ class Store:
             "notes": [
                 "纯诊断对照不产生处置提议，错误处置提议数与拦截率不适用，不记 0。",
                 "纯诊断对照没有审批环节，人工审批等待不适用，不记 0。",
+                "耗时已拆分为模型时间、采证时间与容器启停时间分别显示。",
                 "样本量是复现基线，不构成统计显著性。",
                 "根因枚举收窄了假设空间，评测报告必须显式声明这一限制。",
                 "分母只含快照内故障成立、且未超限的实验。",

@@ -326,8 +326,20 @@ class Workflow:
                     "previous_execution": state.get("execution"),
                 }
             )
-            validate_plan(result, Scenario(state.get("scenario_key", "MYSQL_DOWN")))
             plan_id = new_id("plan")
+            # 先留痕再校验：被白名单门禁拦下的非法提议也必须计数（§9.1「即使被拦截也要计数」）。
+            with self.store.session() as session, session.begin():
+                self.store.audit(
+                    session,
+                    state["incident_id"],
+                    "plan_proposal",
+                    {
+                        "plan_id": plan_id,
+                        "attempt": state["attempt"],
+                        **result.model_dump(mode="json"),
+                    },
+                )
+            validate_plan(result, Scenario(state.get("scenario_key", "MYSQL_DOWN")))
             self.phase(
                 state, Status.WAITING_APPROVAL, plan=result.model_dump(mode="json"), plan_id=plan_id
             )
