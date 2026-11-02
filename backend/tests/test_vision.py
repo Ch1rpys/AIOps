@@ -74,6 +74,13 @@ def test_historical_screenshot_conflict_blocks_recovery(client, world):
     upload(client, incident_id)
     # 注入后探针恢复正常：截图是历史异常，与当前实测冲突。
     world.stopped = False
+    before = len(
+        [
+            record
+            for record in client.get(f"/api/incidents/{incident_id}").json()["records"]
+            if record["kind"] == "evidence" and record["payload"].get("kind") == "container_state"
+        ]
+    )
     client.post(f"/api/incidents/{incident_id}/diagnose")
     item = client.get(f"/api/incidents/{incident_id}").json()
     assert item["status"] == "UNKNOWN"
@@ -82,6 +89,13 @@ def test_historical_screenshot_conflict_blocks_recovery(client, world):
     # 没有进入审批页，也没有执行任何动作。
     assert "plan_id" not in item["detail"]
     assert world.operations == [("demo-mysql", "stop")]
+    # §5.3 情形 3：冲突要先补查一轮再判，而不是直接收尾。
+    assert item["detail"]["attachment_recheck_count"] == 1
+    records = [record for record in item["records"] if record["kind"] == "evidence"]
+    # 冲突后补采了一轮：不是直接收尾（§5.3 情形 3「提示冲突并补查」）。
+    # 本次诊断先采一轮 → 发现冲突 → 再补采一轮 → 仍冲突才收尾。
+    after = len([r for r in records if r["payload"]["kind"] == "container_state"])
+    assert after - before == 2
 
 
 def test_attachment_never_decides_recovery_by_itself(client, world):

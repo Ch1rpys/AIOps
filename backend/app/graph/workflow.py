@@ -42,6 +42,8 @@ class IncidentState(TypedDict, total=False):
     collect_count: int
     supplement_count: int
     supplements: list[dict]
+    attachment_recheck_count: int
+    attachment_recheck_pending: bool
     started_at: str
     evidence: list[dict]
     diagnosis: dict
@@ -206,6 +208,9 @@ class Workflow:
     def after_collect(self, state):
         if state.get("error"):
             return END
+        if state.get("attachment_recheck_pending"):
+            # 冲突补查后直接复判：冲突提示不能被「证据不足」盖掉。
+            return "diagnose"
         # 第二轮容器可能已运行；仍需把失败业务探针交给诊断，再校验根因是否支持动作。
         if observations_available(
             [Evidence.model_validate(e) for e in state["evidence"]],
@@ -226,6 +231,18 @@ class Workflow:
             # 截图与实测证据冲突时先补查：图片本身不能决定恢复，也不能放行到审批页。
             conflict = self.attachment_conflict(state)
             if conflict:
+                if not state.get("attachment_recheck_count"):
+                    # 第一次发现冲突：先重新采一轮证据再判（§5.3 情形 3「提示冲突并补查」）。
+                    self.phase(
+                        state,
+                        Status.DIAGNOSING,
+                        attachment_conflict=conflict,
+                        attachment_recheck_count=1,
+                    )
+                    return {
+                        "attachment_recheck_count": 1,
+                        "attachment_recheck_pending": True,
+                    }
                 raise DomainError("EVIDENCE_CONFLICT", conflict)
             trace = ModelTrace()
             result = self.diagnosis.diagnose(
@@ -244,6 +261,7 @@ class Workflow:
                 state,
                 Status.DIAGNOSING,
                 diagnosis=result.model_dump(mode="json"),
+                attachment_recheck_pending=False,
                 # 模型原始输出单独留痕：审计要的是模型真的说了什么，不是我们解析后的结论。
                 raw_model_output=trace.raw.get("analysis"),
                 model_usage=trace.usage,
@@ -251,7 +269,10 @@ class Workflow:
             # 闭环入口同时要求引用完整性与执行许可；盲诊路径只查完整性，另走独立入口。
             collected = [Evidence.model_validate(e) for e in state["evidence"]]
             validate_evidence_integrity(result, collected)
-            return {"diagnosis": result.model_dump(mode="json")}
+            return {
+                "diagnosis": result.model_dump(mode="json"),
+                "attachment_recheck_pending": False,
+            }
 
         return self.guarded(state, Status.DIAGNOSING, operation)
 
@@ -314,6 +335,9 @@ class Workflow:
     def after_diagnose(self, state):
         if state.get("error"):
             return END
+        if state.get("attachment_recheck_pending"):
+            # 截图与实测冲突：补采一轮再判一次，仍冲突才收尾。
+            return "collect"
         requested = (state.get("diagnosis") or {}).get("requested_checks") or []
         if not requested:
             return "authorize"
