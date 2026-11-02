@@ -486,3 +486,30 @@ def test_attachment_filename_never_reaches_the_model_payload(client, world):
         blob = json.dumps(context.get("evidence", []), ensure_ascii=False)
         assert "MYSQL_SERVICE_STOPPED.png" not in blob
         assert "MYSQL_SERVICE_STOPPED" not in blob
+
+
+def test_idempotency_fingerprint_covers_the_visual_evidence(client, world):
+    """同一把幂等键换了截图：必须报冲突，不能悄悄复用上一批实验。"""
+    first = client.post(
+        "/api/evaluation/runs",
+        json={
+            "scenario": "MYSQL_DOWN",
+            "arms": ["C"],
+            "confirm": True,
+            "attachment_ids": ["att_" + "a" * 64],
+        },
+        headers={"Idempotency-Key": "TEST-eval-idem"},
+    )
+    assert first.status_code == 202
+    second = client.post(
+        "/api/evaluation/runs",
+        json={
+            "scenario": "MYSQL_DOWN",
+            "arms": ["C"],
+            "confirm": True,
+            "attachment_ids": ["att_" + "b" * 64],
+        },
+        headers={"Idempotency-Key": "TEST-eval-idem"},
+    )
+    assert second.status_code == 409
+    assert second.json()["error"]["code"] == "IDEMPOTENCY_CONFLICT"

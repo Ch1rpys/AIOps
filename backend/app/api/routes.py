@@ -294,7 +294,11 @@ def create_evaluation_run(
             "C 臂需要先上传截图（POST /api/evaluation/attachments）并带上 attachment_ids",
             409,
         )
-    scope, fingerprint = "evaluation", f"{body.scenario.value}:{','.join(body.arms)}"
+    # 幂等指纹必须覆盖全部会影响实验内容的输入：截图换了就不是同一批实验。
+    scope = "evaluation"
+    fingerprint = (
+        f"{body.scenario.value}:{','.join(body.arms)}:{','.join(sorted(body.attachment_ids))}"
+    )
     with platform_service.store.session() as session:
         previous = platform_service.store.receipt(session, key, scope, fingerprint)
         if previous:
