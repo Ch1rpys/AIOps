@@ -20,6 +20,7 @@ from app.integrations.docker import DockerController
 from app.integrations.models import HolmesDiagnosisProvider, LLMPlanner
 from app.integrations.probes import Probes
 from app.repositories.store import Store
+from app.services.evaluation import EvaluationService
 from app.services.executor import ActionExecutor
 from app.services.platform import Platform
 
@@ -53,22 +54,27 @@ def create_app(settings: Settings | None = None, factory=None) -> FastAPI:
                 serde=JsonPlusSerializer(pickle_fallback=False, allowed_msgpack_modules=None),
             )
             if factory:
-                service = factory(settings, store, saver, client)
+                service, evaluation_service = factory(settings, store, saver, client)
             else:
                 docker = DockerController(settings)
                 probes = Probes(settings, client)
                 evidence = EvidenceAgent(settings, docker, probes)
+                provider = HolmesDiagnosisProvider(settings, client)
                 workflow = Workflow(
                     store,
                     evidence,
-                    HolmesDiagnosisProvider(settings, client),
+                    provider,
                     LLMPlanner(settings, client),
                     ActionExecutor(store, docker),
                     probes,
                     saver,
                 )
                 service = Platform(settings, store, docker, probes, evidence, workflow, client)
+                evaluation_service = EvaluationService(
+                    settings, store, docker, probes, evidence, provider
+                )
             app.state.platform = service
+            app.state.evaluation = evaluation_service
             service.recover()
             yield
 

@@ -1,5 +1,6 @@
 import hmac
 import json
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, Query, Request
@@ -7,9 +8,17 @@ from fastapi.responses import PlainTextResponse
 
 from app.config import DomainError
 from app.scenarios import SCENARIOS
-from app.schemas.domain import ApprovalRequest, Confirmation, IncidentView, Scenario, Status
+from app.schemas.domain import (
+    ApprovalRequest,
+    Confirmation,
+    EvaluationRequest,
+    IncidentView,
+    Scenario,
+    Status,
+)
 
 router = APIRouter(prefix="/api")
+logger = logging.getLogger("aiops.api")
 Key = Annotated[
     str, Header(alias="Idempotency-Key", min_length=8, max_length=120, pattern=r"^[A-Za-z0-9_-]+$")
 ]
@@ -17,6 +26,10 @@ Key = Annotated[
 
 def platform(request: Request):
     return request.app.state.platform
+
+
+def evaluation(request: Request):
+    return request.app.state.evaluation
 
 
 def require_admin(
@@ -164,3 +177,78 @@ def report_markdown(incident_id: str, service=Depends(platform)):
         "\n".join(content),
         headers={"Content-Disposition": f'attachment; filename="{incident_id}.md"'},
     )
+
+
+# ---- 盲诊评测（独立路由，不进工作台）----------------------------------------
+# 真值只在 evaluation_runs.truth_scenario 一处，由评测服务读写。
+# 默认返回体一律不含真值与判卷结果；只有显式的评测视图才带出来。
+
+
+def evaluation_view(request: Request) -> bool:
+    """评测视图开关：必须带管理员令牌，避免真值被顺手读走。"""
+    if request.query_params.get("view") != "evaluation":
+        return False
+    require_admin(request, request.headers.get("X-Admin-Token"))
+    return True
+
+
+def run_evaluation_safely(service, scenario, arms) -> None:
+    """后台执行评测：异常只记录，不让后台任务把响应周期搞崩。"""
+    try:
+        service.run_experiment(scenario, arms)
+    except DomainError as error:
+        logger.error("evaluation_failed scenario=%s code=%s", scenario, error.code)
+    except Exception as error:  # pragma: no cover - 兜底，避免后台任务抛出
+        logger.error("evaluation_failed scenario=%s type=%s", scenario, type(error).__name__)
+
+
+@router.post("/evaluation/runs", dependencies=admin, status_code=202)
+def create_evaluation_run(
+    body: EvaluationRequest,
+    key: Key,
+    tasks: BackgroundTasks,
+    service=Depends(evaluation),
+    platform_service=Depends(platform),
+):
+    scope, fingerprint = "evaluation", f"{body.scenario.value}:{','.join(body.arms)}"
+    with platform_service.store.session() as session:
+        previous = platform_service.store.receipt(session, key, scope, fingerprint)
+        if previous:
+            return previous
+        if platform_service.store.evaluation_busy():
+            raise DomainError("EVALUATION_BUSY", "评测进行中，请等待当前评测结束", 409)
+        if platform_service.store.lab_busy():
+            raise DomainError("LAB_BUSY", "工作台实验进行中，请先完成或重置当前实验后再评测", 409)
+    response = {
+        "accepted": True,
+        "scenario": body.scenario.value,
+        "arms": body.arms,
+        "status": "QUEUED",
+    }
+    with platform_service.store.session() as session, session.begin():
+        platform_service.store.save_receipt(session, key, scope, fingerprint, response)
+    tasks.add_task(run_evaluation_safely, service, body.scenario, body.arms)
+    return response
+
+
+@router.get("/evaluation/runs")
+def list_evaluation_runs(
+    request: Request,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    arm: str | None = None,
+    service=Depends(evaluation),
+):
+    reveal = evaluation_view(request)
+    return service.store.evaluation_runs(limit, offset, arm, reveal)
+
+
+@router.get("/evaluation/summary")
+def evaluation_summary(service=Depends(evaluation)):
+    return service.store.evaluation_summary()
+
+
+@router.get("/evaluation/runs/{run_id}")
+def evaluation_run(run_id: str, request: Request, service=Depends(evaluation)):
+    reveal = evaluation_view(request)
+    return service.store.evaluation_run(run_id, reveal)

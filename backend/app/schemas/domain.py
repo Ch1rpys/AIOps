@@ -105,6 +105,22 @@ class Diagnosis(StrictModel):
     evidence_sufficient: StrictBool
 
 
+class DomainReview(StrictModel):
+    """B 臂的独立复核结论：同意或质疑，并给出自己的根因判断。"""
+
+    verdict: Literal["agree", "disagree"]
+    root_cause: Literal[
+        "MYSQL_SERVICE_STOPPED",
+        "REDIS_SERVICE_STOPPED",
+        "UPSTREAM_APP_STOPPED",
+        "INSUFFICIENT_EVIDENCE",
+        "OTHER",
+    ]
+    reason: str = Field(min_length=1, max_length=2000)
+    evidence_ids: list[str] = Field(min_length=1, max_length=30)
+    evidence_sufficient: StrictBool
+
+
 class Plan(StrictModel):
     action_id: Action
     target: Literal["demo-mysql", "demo-redis", "demo-app", "none"]
@@ -132,6 +148,30 @@ class ApprovalRequest(StrictModel):
     plan_id: str = Field(min_length=1, max_length=80)
     decision: Literal["approve", "reject"]
     comment: str = Field(default="", max_length=500)
+
+
+class EvaluationRequest(StrictModel):
+    """触发一次盲诊实验。scenario 是注入指令，由管理员选择，不进模型上下文。"""
+
+    scenario: Scenario
+    arms: list[Literal["A", "B", "C"]] = Field(default_factory=lambda: ["A", "B"])
+    confirm: StrictBool
+
+    @field_validator("confirm")
+    @classmethod
+    def require_confirmation(cls, value: bool) -> bool:
+        if not value:
+            raise ValueError("评测必须明确确认")
+        return value
+
+    @field_validator("arms")
+    @classmethod
+    def require_known_arms(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("至少选择一个实验臂")
+        if len(set(value)) != len(value):
+            raise ValueError("实验臂不可重复")
+        return value
 
 
 class Verification(StrictModel):

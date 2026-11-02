@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -33,11 +33,31 @@ class Settings(BaseSettings):
     probe_timeout: int = Field(default=3, ge=1, le=10)
     docker_timeout: int = Field(default=20, ge=1, le=60)
     model_timeout: int = Field(default=90, ge=1, le=180)
+    # 评测专用预算：见 docs/落地执行计划.md §9.4。
+    # 采用「评测专用较短超时」方案，使单次调用不可能突破总预算，
+    # 「超限终止」才能真正落在两次调用之间而不是让在途调用把预算吃光。
+    evaluation_model_timeout: int = Field(default=15, ge=1, le=60)
+    evaluation_budget_seconds: int = Field(default=45, ge=5, le=300)
+    evaluation_max_model_calls: int = Field(default=3, ge=1, le=10)
+    evaluation_max_extra_collects: int = Field(default=2, ge=0, le=5)
     verification_attempts: int = Field(default=5, ge=1, le=5)
     verification_interval: float = Field(default=3, ge=0, le=5)
     fault_confirmation_attempts: int = Field(default=3, ge=1, le=5)
     fault_confirmation_interval: float = Field(default=2, ge=0, le=5)
     log_lines: int = Field(default=60, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def evaluation_budget_covers_all_calls(self) -> "Settings":
+        # 单次调用超时 × 允许的调用次数必须落在总预算内，
+        # 否则「超限终止」在 httpx 无法中断在途请求的前提下不可实现。
+        if self.evaluation_model_timeout * self.evaluation_max_model_calls > (
+            self.evaluation_budget_seconds
+        ):
+            raise ValueError(
+                "评测预算不自洽：evaluation_model_timeout × evaluation_max_model_calls "
+                "必须不大于 evaluation_budget_seconds"
+            )
+        return self
 
 
 class DomainError(Exception):

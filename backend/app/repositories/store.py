@@ -87,6 +87,20 @@ class EvaluationArm(Base):
     arm: Mapped[str] = mapped_column(String)
 
 
+class EvaluationLease(Base):
+    """评测租约：与工作台的 lab_lease 互斥，二选一策略见 §4.4。
+
+    采用「独立租约标识」而不是复用 lab_lease：
+    评测不创建 Incident 行，而 lab_lease.incident_id 有指向 incidents 的外键，
+    复用它要么造一条带真值的假工单（真值外泄），要么破坏外键约束。
+    """
+
+    __tablename__ = "evaluation_lease"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    holder: Mapped[str] = mapped_column(String)
+    acquired_at: Mapped[str] = mapped_column(String)
+
+
 SCHEMA_VERSION = 2
 SUPPORTED_SCHEMA_VERSIONS = {0, 1, 2}
 
@@ -126,6 +140,7 @@ class Store:
         """
         EvaluationRun.__table__.create(bind=connection, checkfirst=True)
         EvaluationArm.__table__.create(bind=connection, checkfirst=True)
+        EvaluationLease.__table__.create(bind=connection, checkfirst=True)
 
     def session(self) -> Session:
         return Session(self.engine, expire_on_commit=False)
@@ -222,3 +237,187 @@ class Store:
 
     def close(self):
         self.engine.dispose()
+
+    # ---- 评测：租约、实验落库与聚合 ------------------------------------------
+
+    def evaluation_busy(self) -> bool:
+        with self.session() as session:
+            return session.get(EvaluationLease, 1) is not None
+
+    def lab_busy(self) -> bool:
+        with self.session() as session:
+            return session.get(LabLease, 1) is not None
+
+    def acquire_evaluation_lease(self, holder: str) -> None:
+        with self.session() as session, session.begin():
+            if session.get(EvaluationLease, 1) is not None:
+                raise DomainError("EVALUATION_BUSY", "评测进行中，请等待当前评测结束", 409)
+            if session.get(LabLease, 1) is not None:
+                raise DomainError(
+                    "LAB_BUSY", "工作台实验进行中，请先完成或重置当前实验后再评测", 409
+                )
+            session.add(EvaluationLease(id=1, holder=holder, acquired_at=now()))
+
+    def release_evaluation_lease(self, holder: str) -> None:
+        with self.session() as session, session.begin():
+            lease = session.get(EvaluationLease, 1)
+            if lease is not None and lease.holder == holder:
+                session.delete(lease)
+
+    def save_evaluation_run(
+        self,
+        run: EvaluationRun,
+        arm: EvaluationArm,
+    ) -> None:
+        with self.session() as session, session.begin():
+            session.add(run)
+            session.add(arm)
+
+    @staticmethod
+    def evaluation_row(item: EvaluationRun, reveal: bool = False) -> dict:
+        """评测列表/详情的一行。reveal=False 时一律不含真值与判卷结果。"""
+        diagnosis = item.diagnosis_json or {}
+        row = {
+            "id": item.id,
+            "arm": item.arm,
+            "snapshot_hash": item.snapshot_hash,
+            "root_cause": diagnosis.get("root_cause"),
+            "evidence_sufficient": diagnosis.get("evidence_sufficient"),
+            "summary": diagnosis.get("summary"),
+            "status": diagnosis.get("status", "COMPLETED"),
+            "model_calls": item.model_calls,
+            "latency_ms": item.latency_ms,
+            "token_usage": item.token_usage,
+            "fault_present": item.fault_present,
+            "created_at": item.created_at,
+        }
+        if reveal:
+            row.update(
+                {
+                    "truth_scenario": item.truth_scenario,
+                    "correct": item.correct,
+                    "rejected": item.rejected,
+                }
+            )
+        return row
+
+    def evaluation_runs(
+        self, limit: int, offset: int, arm: str | None = None, reveal: bool = False
+    ) -> list[dict]:
+        with self.session() as session:
+            query = select(EvaluationRun).order_by(EvaluationRun.created_at.desc())
+            if arm:
+                query = query.where(EvaluationRun.arm == arm)
+            items = session.scalars(query.offset(offset).limit(limit)).all()
+            return [self.evaluation_row(item, reveal) for item in items]
+
+    def evaluation_run(self, run_id: str, reveal: bool = False) -> dict:
+        with self.session() as session:
+            item = session.get(EvaluationRun, run_id)
+            if item is None:
+                raise DomainError("NOT_FOUND", "评测记录不存在", 404)
+            row = self.evaluation_row(item, reveal)
+            row["evidence"] = item.evidence_json or {}
+            row["diagnosis"] = item.diagnosis_json or {}
+            return row
+
+    def evaluation_arms(self, snapshot_hash: str) -> list[dict]:
+        with self.session() as session:
+            items = session.scalars(
+                select(EvaluationArm).where(EvaluationArm.snapshot_hash == snapshot_hash)
+            ).all()
+            return [
+                {
+                    "id": item.id,
+                    "arm": item.arm,
+                    "model": item.model,
+                    "prompt_version": item.prompt_version,
+                    "max_tokens": item.max_tokens,
+                    "timeout_s": item.timeout_s,
+                }
+                for item in items
+            ]
+
+    def evaluation_summary(self) -> dict:
+        """按臂聚合正确率、拒答率与消耗。
+
+        分母只含「有效实验」：快照内故障成立、且不是超限或基础设施故障的实验。
+        快照里故障没发生时，拿着并未发生的故障当标准答案会静默污染正确率；
+        超限与基础设施故障不是模型能力问题，混进同一个分母同样会污染正确率。
+        """
+        with self.session() as session:
+            items = session.scalars(select(EvaluationRun)).all()
+        arms: dict[str, dict] = {}
+        for item in items:
+            bucket = arms.setdefault(
+                item.arm,
+                {
+                    "arm": item.arm,
+                    "runs": 0,
+                    "valid_runs": 0,
+                    "correct": 0,
+                    "rejected": 0,
+                    "contradictory": 0,
+                    "invalid_runs": 0,
+                    "budget_exceeded": 0,
+                    "errors": 0,
+                    "contract_violations": 0,
+                    "latency_total_ms": 0,
+                    "latency_samples": 0,
+                    "model_calls_total": 0,
+                    "extra_collects_total": 0,
+                },
+            )
+            bucket["runs"] += 1
+            diagnosis = item.diagnosis_json or {}
+            status = diagnosis.get("status", "COMPLETED")
+            bucket["extra_collects_total"] += int(diagnosis.get("extra_collects", 0) or 0)
+            bucket["contract_violations"] += len(diagnosis.get("contract_violations", []) or [])
+            if item.latency_ms is not None:
+                bucket["latency_total_ms"] += item.latency_ms
+                bucket["latency_samples"] += 1
+            if item.model_calls is not None:
+                bucket["model_calls_total"] += item.model_calls
+            if status == "BUDGET_EXCEEDED":
+                bucket["budget_exceeded"] += 1
+                continue
+            if status == "ERROR":
+                bucket["errors"] += 1
+                continue
+            if item.fault_present != 1:
+                bucket["invalid_runs"] += 1
+                continue
+            bucket["valid_runs"] += 1
+            if item.correct == 1:
+                bucket["correct"] += 1
+            if item.rejected == 1:
+                bucket["rejected"] += 1
+            if diagnosis.get("evidence_sufficient") is False and not item.rejected:
+                bucket["contradictory"] += 1
+        result = []
+        for _, bucket in sorted(arms.items()):
+            valid = bucket["valid_runs"]
+            samples = bucket["latency_samples"]
+            calls = bucket["model_calls_total"]
+            result.append(
+                {
+                    **bucket,
+                    "accuracy": round(bucket["correct"] / valid, 4) if valid else None,
+                    "rejection_rate": round(bucket["rejected"] / valid, 4) if valid else None,
+                    "avg_latency_ms": (
+                        round(bucket["latency_total_ms"] / samples) if samples else None
+                    ),
+                    "model_calls_avg": round(calls / bucket["runs"], 2) if bucket["runs"] else None,
+                }
+            )
+        return {
+            "arms": result,
+            "proposal_metrics_applicable": False,
+            "notes": [
+                "纯诊断对照不产生处置提议，错误处置提议数与拦截率不适用，不记 0。",
+                "纯诊断对照没有审批环节，人工审批等待不适用，不记 0。",
+                "样本量是复现基线，不构成统计显著性。",
+                "根因枚举收窄了假设空间，评测报告必须显式声明这一限制。",
+                "分母只含快照内故障成立、且未超限的实验。",
+            ],
+        }

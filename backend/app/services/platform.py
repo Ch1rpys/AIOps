@@ -7,10 +7,11 @@ from langgraph.types import Command
 from sqlalchemy import select
 
 from app.agents.evidence import fault_observed
-from app.config import COMPOSE_PROJECT, SERVICES, DomainError
+from app.config import SERVICES, DomainError
 from app.repositories.store import Incident, LabLease, RequestReceipt
 from app.scenarios import SCENARIOS
-from app.schemas.domain import TERMINAL, Scenario, Status, Verdict, new_id, now
+from app.schemas.domain import TERMINAL, Scenario, Status, new_id, now
+from app.services.lab import lab_baseline
 
 logger = logging.getLogger("aiops.platform")
 RUNNING = {
@@ -65,34 +66,11 @@ class Platform:
         return {"configurable": {"thread_id": incident_id}, "recursion_limit": 30}
 
     def environment(self) -> dict:
-        states, error = {}, None
-        try:
-            states = self.docker.snapshot()
-        except DomainError as failure:
-            error = {"code": failure.code, "message": failure.message}
-        checks = self.probes.baseline()
-        healthy = (
-            not error
-            and all(
-                states.get(s, {}).get("state") == "running"
-                and states[s].get("health") == "healthy"
-                and states[s].get("project") == COMPOSE_PROJECT
-                for s in SERVICES
-            )
-            and all(p.verdict == Verdict.PASS for p in checks)
-        )
+        baseline = lab_baseline(self.docker, self.probes)
         with self.store.session() as session:
             lease = session.get(LabLease, 1)
             owner = lease.incident_id if lease else None
-        return {
-            "healthy": healthy,
-            "compose_project": COMPOSE_PROJECT,
-            "services": states,
-            "probes": [p.model_dump(mode="json") for p in checks],
-            "error": error,
-            "active_incident_id": owner,
-            "captured_at": now(),
-        }
+        return {**baseline, "active_incident_id": owner, "captured_at": now()}
 
     def health(self) -> dict:
         try:
@@ -142,6 +120,9 @@ class Platform:
                     return previous
                 if session.get(LabLease, 1):
                     raise DomainError("LAB_BUSY", "实验环境已被占用，请先完成或重置当前实验")
+            # 评测与工作台共用同一个四容器环境，不能并行。
+            if self.store.evaluation_busy():
+                raise DomainError("EVALUATION_BUSY", "评测进行中，请等待评测结束后再注入故障", 409)
             baseline = self.environment()
             if not baseline["healthy"]:
                 raise DomainError("BASELINE_UNHEALTHY", "四个 demo 服务与探针未全部通过，禁止注入")
@@ -331,6 +312,8 @@ class Platform:
                 incident_id = lease.incident_id if lease else None
                 if incident_id and self.store.require(session, incident_id).status in RUNNING:
                     raise DomainError("LAB_BUSY", "流程运行中，暂不能重置")
+            if self.store.evaluation_busy():
+                raise DomainError("EVALUATION_BUSY", "评测进行中，请等待评测结束后再重置", 409)
             with self.store.session() as session, session.begin():
                 self.store.save_receipt(session, key, "reset", "confirmed", {"pending": True})
                 self.store.audit(
