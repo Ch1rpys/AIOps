@@ -173,3 +173,17 @@ def test_report_renders_without_summary():
     report = run_evaluation.render_markdown(TRANSCRIPT)
     assert "复现基线" in report
     assert json.dumps(TRANSCRIPT["results"][0], ensure_ascii=False)
+
+
+def test_report_states_each_arm_input():
+    """C 臂的输入与 A/B 不同：报告必须写清楚，否则读者会把差异归错。"""
+    transcript = {
+        "started_at": "t0",
+        "arms": ["A", "B", "C"],
+        "notes": [],
+        "results": [],
+    }
+    report = run_evaluation.render_markdown(transcript)
+    assert "## 各臂输入" in report
+    assert "纯文本证据" in report
+    assert "视觉证据" in report

@@ -119,6 +119,18 @@ def render_markdown(transcript: dict, summary: dict | None = None) -> str:
                 review="一致" if item.get("reviewer_matches_truth") else "不一致",
             )
         )
+    if "C" in (transcript.get("arms") or []):
+        lines.extend(
+            [
+                "",
+                "## 各臂输入",
+                "",
+                "- A 臂：单次诊断，纯文本证据。",
+                "- B 臂：多 Agent 诊断与复核，纯文本证据。",
+                "- C 臂：同 B，额外加入视觉证据（截图观测）。",
+                "- 三臂复用同一份文本快照的 `snapshot_hash`；C 臂的视觉证据另记在该臂记录里。",
+            ]
+        )
     lines.extend(["", "## 耗时拆分（§9.2）", ""])
     lines.append("| 实验臂 | 模型时间 | 采证时间 | 容器停止 | 容器恢复 | 人工审批等待 |")
     lines.append("| --- | --- | --- | --- | --- | --- |")
