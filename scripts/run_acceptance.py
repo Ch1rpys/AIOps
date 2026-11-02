@@ -150,6 +150,12 @@ def run(args) -> int:
                             report_path = folder / f"{incident_id}.md"
                             report_path.write_text(markdown, encoding="utf-8")
                             diagnosis = extract_diagnosis(item)
+                            # 审计记录一并导出：每轮的采集、模型、审批、执行都要能复查。
+                            records_path = folder / f"{incident_id}.records.json"
+                            records_path.write_text(
+                                json.dumps(item.get("records", []), ensure_ascii=False, indent=2),
+                                encoding="utf-8",
+                            )
                             diagnosis_path = folder / f"{incident_id}.diagnosis.json"
                             diagnosis_path.write_text(
                                 json.dumps(diagnosis, ensure_ascii=False, indent=2),
@@ -179,6 +185,7 @@ def run(args) -> int:
                                 "diagnosis": diagnosis,
                                 "report_path": str(report_path),
                                 "diagnosis_path": str(diagnosis_path),
+                                "records_path": str(records_path),
                                 "model_output_path": str(raw_path),
                             }
                             transcript["runs"].append(entry)
