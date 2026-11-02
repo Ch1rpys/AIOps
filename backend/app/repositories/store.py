@@ -55,6 +55,42 @@ class LabLease(Base):
     incident_id: Mapped[str] = mapped_column(ForeignKey("incidents.id"))
 
 
+class EvaluationRun(Base):
+    """一次盲诊实验。truth_scenario 只由评测服务读写，不进模型上下文、不进日志。"""
+
+    __tablename__ = "evaluation_runs"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    arm: Mapped[str] = mapped_column(String)
+    truth_scenario: Mapped[str] = mapped_column(String)
+    snapshot_hash: Mapped[str] = mapped_column(String, index=True)
+    evidence_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    diagnosis_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    correct: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rejected: Mapped[int] = mapped_column(Integer, default=0)
+    fault_present: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    model_calls: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    token_usage: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[str] = mapped_column(String)
+
+
+class EvaluationArm(Base):
+    """同一 snapshot 下各臂的配置快照，保证 A/B/C 的可比性可复查。"""
+
+    __tablename__ = "evaluation_arms"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    snapshot_hash: Mapped[str] = mapped_column(String, index=True)
+    model: Mapped[str] = mapped_column(String)
+    prompt_version: Mapped[str] = mapped_column(String)
+    max_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    timeout_s: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    arm: Mapped[str] = mapped_column(String)
+
+
+SCHEMA_VERSION = 2
+SUPPORTED_SCHEMA_VERSIONS = {0, 1, 2}
+
+
 class Store:
     def __init__(self, path):
         self.engine = create_engine(f"sqlite:///{path}", connect_args={"check_same_thread": False})
@@ -68,11 +104,28 @@ class Store:
         # 仅创建缺失表；schema v1 的增量迁移须新增版本，禁止清库升级。
         with self.engine.begin() as connection:
             version = connection.exec_driver_sql("PRAGMA user_version").scalar_one()
-            if version not in {0, 1}:
+            if version not in SUPPORTED_SCHEMA_VERSIONS:
                 raise DomainError("SCHEMA_VERSION_MISMATCH", "业务数据库版本不兼容", 503)
         Base.metadata.create_all(self.engine)
         with self.engine.begin() as connection:
-            connection.exec_driver_sql("PRAGMA user_version=1")
+            version = connection.exec_driver_sql("PRAGMA user_version").scalar_one()
+            if version == 0:
+                # 全新库：先落 v1 形状，再走迁移分支，版本号始终与实际 schema 一致。
+                connection.exec_driver_sql("PRAGMA user_version=1")
+                version = 1
+            if version == 1:
+                self.migrate_1_to_2(connection)
+                connection.exec_driver_sql(f"PRAGMA user_version={SCHEMA_VERSION}")
+
+    @staticmethod
+    def migrate_1_to_2(connection) -> None:
+        """v1 → v2：新增评测表。
+
+        create_all 只建缺失表、不改已有表；这里显式声明版本边界上的增量内容，
+        迁移完成后再把 user_version 提到 2，升级路径与护栏都成立。
+        """
+        EvaluationRun.__table__.create(bind=connection, checkfirst=True)
+        EvaluationArm.__table__.create(bind=connection, checkfirst=True)
 
     def session(self) -> Session:
         return Session(self.engine, expire_on_commit=False)

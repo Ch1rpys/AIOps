@@ -8,7 +8,12 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
-from app.agents.evidence import EvidenceAgent, observations_available, validate_diagnosis
+from app.agents.evidence import (
+    EvidenceAgent,
+    observations_available,
+    validate_evidence_integrity,
+    validate_execution_preconditions,
+)
 from app.config import DomainError
 from app.integrations.models import DiagnosisProvider, PlannerProvider
 from app.integrations.probes import Probes
@@ -188,9 +193,12 @@ class Workflow:
             )
             # 语义校验拦截前保存模型结论，UNKNOWN 也必须能回溯其依据与疑点。
             self.phase(state, Status.DIAGNOSING, diagnosis=result.model_dump(mode="json"))
-            validate_diagnosis(
+            # 闭环入口同时要求引用完整性与执行许可；盲诊路径只查完整性，另走独立入口。
+            collected = [Evidence.model_validate(e) for e in state["evidence"]]
+            validate_evidence_integrity(result, collected)
+            validate_execution_preconditions(
                 result,
-                [Evidence.model_validate(e) for e in state["evidence"]],
+                collected,
                 Scenario(state.get("scenario_key", "MYSQL_DOWN")),
             )
             return {"diagnosis": result.model_dump(mode="json")}

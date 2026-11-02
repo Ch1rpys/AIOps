@@ -20,6 +20,7 @@ class TestWorld:
         self.diagnosis_error = None
         self.missing_evidence = False
         self.diagnosis_contexts = []
+        self.evidence_sufficient = True
 
     def snapshot(self):
         return {
@@ -55,7 +56,22 @@ class TestWorld:
         return self.mysql()
 
     def baseline(self):
-        return self.mysql()
+        verdict = (
+            Verdict.UNKNOWN
+            if self.missing_evidence
+            else (Verdict.FAIL if self.stopped else Verdict.PASS)
+        )
+        return [
+            Probe(name=name, verdict=verdict, observed={"mode": "TEST/MOCK"})
+            for name in (
+                "mysql_select_1",
+                "app_db_check",
+                "redis_roundtrip",
+                "app_cache_check",
+                "nginx_hello",
+                "app_health",
+            )
+        ]
 
     def verify(self, on_sample, scenario=Scenario.MYSQL_DOWN):
         verdict = self.verdicts.pop(0) if len(self.verdicts) > 1 else self.verdicts[0]
@@ -76,7 +92,7 @@ class TestWorld:
             summary="TEST/MOCK 数据库已停止",
             evidence_ids=[e["id"] for e in context["evidence"]],
             confidence=0.9,
-            evidence_sufficient=True,
+            evidence_sufficient=self.evidence_sufficient,
         )
 
     def plan(self, context):

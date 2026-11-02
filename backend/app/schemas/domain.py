@@ -79,6 +79,18 @@ class Evidence(StrictModel):
     captured_at: str = Field(default_factory=now)
 
 
+REQUIRED_EVIDENCE_KINDS = frozenset({"container_state", "probe"})
+
+
+def required_evidence_ids(evidence: list[Evidence]) -> list[str]:
+    """必须被引用的证据 id：容器状态与全部探针。
+
+    引用完整性校验与盲诊提示词共用这一份判据，
+    避免「提示词只说相关、校验要求全部」这种措辞差异被记成模型能力不足。
+    """
+    return [item.id for item in evidence if item.kind in REQUIRED_EVIDENCE_KINDS]
+
+
 class Diagnosis(StrictModel):
     root_cause: Literal[
         "MYSQL_SERVICE_STOPPED",
