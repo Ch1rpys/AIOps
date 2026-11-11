@@ -1,34 +1,29 @@
 from sqlalchemy import literal_column, select
 
-from app.config import DomainError
+from app.config import CHECK_IDS, DomainError
 from app.repositories.store import Record, Store
-from app.scenarios import SCENARIOS
-from app.schemas.domain import Action, Plan, Scenario, Status
+from app.schemas.domain import Plan, Scenario, Status
+from app.services.action_catalog import lookup, perform
 
 
 def plan_violations(plan: Plan | dict, scenario: Scenario) -> list[str]:
-    """列出计划与场景注册表不符的地方；空列表表示合法。
+    """目录之外的动作才算非法。目录里的其他路线由复测判断对错。
 
-    评测指标要用它统计「错误处置提议数」（§9.1），
-    因此判定口径必须与门禁本身同源，不能另写一份。
+    评测指标与这道门禁同源。场景名只保留参数，避免另写一套判定。
     """
-    definition = SCENARIOS[scenario]
+    del scenario
     data = plan if isinstance(plan, dict) else plan.model_dump(mode="json")
-    action = data.get("action_id")
-    allowed = (
-        dict(definition.action_targets)
-        if definition.action_targets
-        else {definition.action: definition.target}
-    )
-    expected_target = "none" if action == Action.NO_ACTION else allowed.get(action)
+    action = str(data.get("action_id") or "")
+    entry = lookup(action)
     violations: list[str] = []
-    if action not in {*allowed, Action.NO_ACTION}:
-        violations.append(f"动作 {action} 不在场景白名单内")
-    if data.get("target") != expected_target:
-        violations.append(f"目标 {data.get('target')} 与场景不符")
-    expected = sorted(definition.checks)
-    if sorted(data.get("expected_checks") or []) != expected:
-        violations.append("探针集合与场景不符")
+    if entry is None:
+        violations.append(f"动作 {action} 不在修复目录中")
+        return violations
+    if data.get("target") != entry.target:
+        violations.append(f"目标 {data.get('target')} 与该目录动作不符")
+    checks = data.get("expected_checks") or []
+    if not checks or any(check not in CHECK_IDS for check in checks):
+        violations.append("探针不在已登记检查中")
     return violations
 
 
@@ -84,14 +79,7 @@ class ActionExecutor:
                 {"plan_id": plan_id, "action_id": plan.action_id, "state": "STARTED"},
             )
         try:
-            if plan.action_id == Action.NO_ACTION:
-                output = {"operation": "NO_ACTION", "exit_code": 0}
-            elif plan.action_id == Action.RESTORE_NGINX_UPSTREAM:
-                output = self.docker.apply_nginx_upstream("healthy")
-            elif plan.action_id == Action.RESTORE_APP_MODE:
-                output = self.docker.apply_app_mode("ok")
-            else:
-                output = self.docker.change(plan.target, "start")
+            output = perform(self.docker, plan.action_id)
         except DomainError as error:
             with self.store.session() as session, session.begin():
                 self.store.audit(

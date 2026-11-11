@@ -2,12 +2,10 @@ import httpx
 import pytest
 import redis
 from app.agents.evidence import fault_observed
-from app.config import DomainError
 from app.integrations.probes import Probes, judge
 from app.main import create_app
 from app.scenarios import SCENARIOS
 from app.schemas.domain import (
-    Action,
     Diagnosis,
     Evidence,
     Plan,
@@ -16,7 +14,7 @@ from app.schemas.domain import (
     Verdict,
     Verification,
 )
-from app.services.executor import validate_plan
+from app.services.executor import plan_violations
 from conftest import TestWorld, approve
 from fastapi.testclient import TestClient
 
@@ -162,24 +160,20 @@ def test_scenario_graph_end_to_end(settings, scenario, decision):
 @pytest.mark.parametrize(
     "action_scenario", [item for item in Scenario if SCENARIOS[item].recoverable]
 )
-def test_action_cannot_cross_scenarios(scenario, action_scenario):
+def test_catalog_route_is_legal_even_on_another_scenario(scenario, action_scenario):
     action = SCENARIOS[action_scenario]
-    target = "none" if action.action == Action.NO_ACTION else action.target
     plan = Plan(
         action_id=action.action,
-        target=target,
+        target=action.target,
         reason="TEST/MOCK",
         risk="LOW",
         expected_checks=list(action.checks),
     )
-    if scenario == action_scenario:
-        validate_plan(plan, scenario)
-    else:
-        with pytest.raises(DomainError):
-            validate_plan(plan, scenario)
+    assert plan_violations(plan, scenario) == []
 
 
-def test_negative_scenario_rejects_every_recovery_plan():
+def test_negative_scenario_still_has_no_required_recovery_in_scoring():
+    """负例的计划可以落在目录里。它不进入正确率，是因为计分规则，不是因为动作名非法。"""
     for scenario in Scenario:
         if not SCENARIOS[scenario].recoverable:
             continue
@@ -191,8 +185,7 @@ def test_negative_scenario_rejects_every_recovery_plan():
             risk="LOW",
             expected_checks=list(definition.checks),
         )
-        with pytest.raises(DomainError):
-            validate_plan(plan, Scenario.APP_HTTP_500)
+        assert plan_violations(plan, Scenario.APP_HTTP_500) == []
 
 
 def test_http_500_reaches_registered_restore(client, world):

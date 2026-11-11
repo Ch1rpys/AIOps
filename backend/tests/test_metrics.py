@@ -7,7 +7,7 @@
 - 时间必须拆开显示；token 取不到就标「未知」。
 """
 
-from app.schemas.domain import Action, Plan, Scenario
+from app.schemas.domain import Plan, Scenario
 from app.services.executor import plan_violations
 from conftest import approve, injected, waiting
 
@@ -16,8 +16,8 @@ def summary(client):
     return client.get("/api/evaluation/summary").json()
 
 
-def test_illegal_proposal_is_counted_even_when_blocked(client, world):
-    world.action = "START_DEMO_REDIS"  # 跨场景动作：会被白名单门禁拦下
+def test_unknown_action_is_blocked_and_counted(client, world):
+    world.action = "DELETE_ALL"
     incident_id = injected(client)
     client.post(f"/api/incidents/{incident_id}/diagnose")
     item = client.get(f"/api/incidents/{incident_id}").json()
@@ -25,7 +25,6 @@ def test_illegal_proposal_is_counted_even_when_blocked(client, world):
     assert item["detail"]["plan"]["action_id"] == "START_DEMO_MYSQL"
     metrics = summary(client)["end_to_end"]
     assert metrics["applicable"] is True
-    # 两次非法提议都被拦住，随后才出现合法的注册恢复动作。
     assert metrics["proposals"] == 3
     assert metrics["illegal_proposals"] == 2
     assert metrics["blocked_proposals"] == 2
@@ -109,9 +108,17 @@ def test_plan_violations_matches_the_gate():
         expected_checks=["mysql_select_1", "app_db_check"],
     )
     assert plan_violations(legal, Scenario.MYSQL_DOWN) == []
-    cross = legal.model_copy(update={"action_id": Action.START_DEMO_REDIS})
-    assert plan_violations(cross, Scenario.MYSQL_DOWN)
+    alternate = Plan(
+        action_id="START_DEMO_REDIS",
+        target="demo-redis",
+        reason="TEST/MOCK",
+        risk="LOW",
+        expected_checks=["redis_roundtrip"],
+    )
+    assert plan_violations(alternate, Scenario.MYSQL_DOWN) == []
     wrong_target = legal.model_copy(update={"target": "demo-redis"})
     assert plan_violations(wrong_target, Scenario.MYSQL_DOWN)
-    wrong_checks = legal.model_copy(update={"expected_checks": ["nginx_hello"]})
-    assert plan_violations(wrong_checks, Scenario.MYSQL_DOWN)
+    unknown = legal.model_copy(update={"action_id": "DELETE_ALL"})
+    assert plan_violations(unknown, Scenario.MYSQL_DOWN)
+    bad_check = legal.model_copy(update={"expected_checks": ["not_a_probe"]})
+    assert plan_violations(bad_check, Scenario.MYSQL_DOWN)

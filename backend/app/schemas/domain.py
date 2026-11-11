@@ -1,9 +1,18 @@
+import re
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    field_validator,
+    model_validator,
+)
 
 
 def now() -> str:
@@ -178,15 +187,92 @@ class DomainReview(StrictModel):
 
 
 class Plan(StrictModel):
-    action_id: Action
-    target: Literal["demo-mysql", "demo-redis", "demo-app", "demo-nginx", "none"]
-    reason: str = Field(min_length=1, max_length=2000)
-    risk: Literal["LOW"]
-    expected_checks: list[
-        Literal[
-            "mysql_select_1", "app_db_check", "redis_roundtrip", "app_cache_check", "nginx_hello"
-        ]
-    ]
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    action_id: str = Field(
+        min_length=1,
+        max_length=800,
+        validation_alias=AliasChoices(
+            "action_id", "actionId", "action", "command", "动作", "动作编号"
+        ),
+    )
+    target: str = Field(
+        min_length=1,
+        max_length=120,
+        validation_alias=AliasChoices("target", "target_service", "目标"),
+    )
+    reason: str = Field(
+        min_length=1,
+        max_length=2000,
+        validation_alias=AliasChoices("reason", "rationale", "explanation", "原因"),
+    )
+    risk: Literal["LOW"] = Field(
+        validation_alias=AliasChoices("risk", "risk_level", "风险"),
+    )
+    expected_checks: list[str] = Field(
+        min_length=1,
+        max_length=6,
+        validation_alias=AliasChoices(
+            "expected_checks", "expectedChecks", "checks", "探针", "检查"
+        ),
+    )
+
+    @field_validator("risk", mode="before")
+    @classmethod
+    def fold_risk(cls, value: object) -> object:
+        if isinstance(value, str):
+            folded = re.sub(r"[\s.]+", "", value).lower()
+            if folded in {"low", "低", "低风险", "低危", "risklow"}:
+                return "LOW"
+        return value
+
+    @field_validator("action_id", mode="before")
+    @classmethod
+    def fold_action_id(cls, value: object) -> object:
+        if isinstance(value, list) and len(value) == 1:
+            value = value[0]
+        if not isinstance(value, str):
+            return value
+        from app.services.action_catalog import canonical_action_id
+
+        return canonical_action_id(value)
+
+    @field_validator("target")
+    @classmethod
+    def fold_target(cls, value: str) -> str:
+        from app.services.action_catalog import canonical_target
+
+        return canonical_target(value)
+
+    @field_validator("expected_checks", mode="before")
+    @classmethod
+    def split_checks(cls, value: object) -> object:
+        junk = {"and", "or", "then", "和", "以及"}
+        if isinstance(value, str):
+            parts = [
+                item.strip()
+                for item in re.split(r"[,，、;；]+|\band\b|和|以及", value, flags=re.I)
+                if item.strip() and item.strip().lower() not in junk
+            ]
+            return parts or [value]
+        if isinstance(value, list):
+            return [item for item in value if str(item).strip().lower() not in junk]
+        return value
+
+    @field_validator("expected_checks")
+    @classmethod
+    def fold_checks(cls, value: list[str]) -> list[str]:
+        from app.services.action_catalog import canonical_check
+
+        return [canonical_check(item) for item in value]
+
+    @model_validator(mode="after")
+    def align_target_with_catalog(self) -> "Plan":
+        from app.services.action_catalog import lookup
+
+        entry = lookup(self.action_id)
+        if entry is not None:
+            self.target = entry.target
+        return self
 
 
 class Confirmation(StrictModel):

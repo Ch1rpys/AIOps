@@ -6,10 +6,9 @@ import pymysql
 import pytest
 from app.config import DomainError, Settings
 from app.integrations.docker import DockerController
-from app.integrations.models import HolmesDiagnosisProvider, LLMPlanner
+from app.integrations.models import HolmesDiagnosisProvider, LLMPlanner, decode_contract
 from app.integrations.probes import Probes, judge
 from app.schemas.domain import Plan, Probe, Verdict
-from pydantic import ValidationError
 
 
 def holmes_transport(handler):
@@ -200,16 +199,24 @@ def test_docker_never_accepts_freeform_commands(settings, monkeypatch):
     assert calls == []
 
 
-def test_plan_forbids_shell_extra_field():
-    with pytest.raises(ValidationError):
-        Plan(
-            action_id="START_DEMO_MYSQL",
-            target="demo-mysql",
-            risk="LOW",
-            reason="test",
-            expected_checks=["mysql_select_1", "app_db_check"],
-            shell="anything",
-        )
+def test_decode_contract_unwraps_markdown_and_plan_wrapper():
+    raw = '```json\n{"plan": {"action_id": "START_DEMO_MYSQL", "target": "demo-mysql"}}\n```'
+    assert decode_contract(raw) == {"action_id": "START_DEMO_MYSQL", "target": "demo-mysql"}
+    diagnosis = {"root_cause": "OTHER", "plan": {"action_id": "START_DEMO_MYSQL"}}
+    assert decode_contract(diagnosis)["root_cause"] == "OTHER"
+
+
+def test_plan_drops_shell_extra_field_without_executing_it():
+    plan = Plan(
+        action_id="START_DEMO_MYSQL",
+        target="demo-mysql",
+        risk="LOW",
+        reason="test",
+        expected_checks=["mysql_select_1", "app_db_check"],
+        shell="anything",
+    )
+    assert plan.action_id == "START_DEMO_MYSQL"
+    assert "shell" not in plan.model_dump()
 
 
 def test_holmes_json_object_mode_still_validates_schema(settings):

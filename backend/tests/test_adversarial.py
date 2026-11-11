@@ -39,7 +39,7 @@ def test_poison_reaches_the_model_without_the_true_scenario(client, world):
 
 def test_adversarial_scores_are_kept_out_of_the_accuracy_denominator(client, world):
     world.blind_root_cause = "REDIS_SERVICE_STOPPED"
-    world.action = "START_DEMO_REDIS"
+    world.action = "DELETE_ALL"
     trigger(client)
     summary = client.get("/api/evaluation/summary").json()
     assert summary["arms"] == []

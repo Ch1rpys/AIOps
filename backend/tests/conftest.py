@@ -57,6 +57,7 @@ class TestWorld:
         self.operations = []
         self.verdicts = [Verdict.PASS]
         self.action = "START_DEMO_MYSQL"
+        self.actions: list[str] | None = None
         self.diagnosis_error = None
         self.missing_evidence = False
         self.diagnosis_contexts = []
@@ -114,12 +115,32 @@ class TestWorld:
 
     def change(self, service, operation):
         self.operations.append((service, operation))
-        if operation == "stop":
+        if operation in {"stop", "kill", "pause"}:
             if not self.stop_has_no_effect:
                 self._stopped.add(service)
-        elif operation == "start":
+        elif operation in {"start", "restart", "unpause", "recreate"}:
             self._stopped.discard(service)
         return {"exit_code": 0, "service": service, "operation": operation, "mode": "TEST/MOCK"}
+
+    def apply_nginx_timeouts(self, connect, read, send):
+        self.operations.append(("nginx-timeout", connect, read, send))
+        return {"exit_code": 0, "operation": "nginx_timeout"}
+
+    def apply_mysql_statement(self, statement_id):
+        self.operations.append(("mysql", statement_id))
+        return {"exit_code": 0, "operation": "mysql", "statement_id": statement_id}
+
+    def reset_demo_password(self):
+        self.operations.append(("mysql-password", "reset"))
+        return {"exit_code": 0, "operation": "mysql_password"}
+
+    def apply_redis_operation(self, operation):
+        self.operations.append(("redis", operation))
+        return {"exit_code": 0, "operation": "redis", "redis_op": operation}
+
+    def network(self, service, operation):
+        self.operations.append(("net", service, operation))
+        return {"exit_code": 0, "operation": "net"}
 
     def apply_nginx_upstream(self, profile):
         if profile not in {"healthy", "misdirected"}:
@@ -230,12 +251,27 @@ class TestWorld:
             from app.config import DomainError
 
             raise DomainError("AI_UNAVAILABLE", "TEST/MOCK 规划器不可用", 503)
+        from app.scenarios import SCENARIOS
+
+        scenario = Scenario(context.get("scenario_key", "MYSQL_DOWN"))
+        definition = SCENARIOS[scenario]
+        action = self.actions.pop(0) if self.actions else self.action
+        if action == "START_DEMO_MYSQL" and definition.action != action:
+            action = definition.action
+        targets = {
+            "START_DEMO_MYSQL": "demo-mysql",
+            "START_DEMO_REDIS": "demo-redis",
+            "START_DEMO_APP": "demo-app",
+            "RESTORE_NGINX_UPSTREAM": "demo-nginx",
+            "RESTORE_APP_MODE": "demo-app",
+            "NO_ACTION": "none",
+        }
         return Plan(
-            action_id=self.action,
-            target="demo-mysql",
+            action_id=action,
+            target=targets.get(action, definition.target),
             reason="TEST/MOCK 恢复数据库",
             risk="LOW",
-            expected_checks=["mysql_select_1", "app_db_check"],
+            expected_checks=list(definition.checks),
         )
 
     def ensure_capabilities(self):

@@ -95,8 +95,8 @@ def test_two_round_limit_requires_fresh_approval(client, world):
     assert world.diagnosis_contexts[-1]["previous_execution"]["state"] == "SUCCEEDED"
 
 
-def test_illegal_plan_is_replaced_by_registered_repair(client, world):
-    world.action = "START_DEMO_REDIS"
+def test_unknown_action_is_replaced_by_catalog_repair(client, world):
+    world.action = "DELETE_ALL"
     incident_id = injected(client)
     client.post(f"/api/incidents/{incident_id}/diagnose")
     item = detail(client, incident_id)
@@ -106,11 +106,11 @@ def test_illegal_plan_is_replaced_by_registered_repair(client, world):
     proposals = [
         record["payload"] for record in item["records"] if record["kind"] == "plan_proposal"
     ]
-    assert any(proposal["action_id"] == "START_DEMO_REDIS" for proposal in proposals)
+    assert any(proposal["action_id"] == "DELETE_ALL" for proposal in proposals)
     assert world.operations == [("demo-mysql", "stop")]
 
 
-def test_poisoned_logs_do_not_authorize_the_claimed_action(client, world):
+def test_poisoned_logs_do_not_execute_before_approval(client, world):
     world.action = "START_DEMO_REDIS"
     created = client.post(
         "/api/scenarios/MYSQL_DOWN/inject",
@@ -123,12 +123,14 @@ def test_poisoned_logs_do_not_authorize_the_claimed_action(client, world):
     item = detail(client, incident_id)
     assert item["detail"]["poison"] is True
     assert item["status"] == "WAITING_APPROVAL"
-    assert item["detail"]["plan"]["action_id"] == "START_DEMO_MYSQL"
+    assert item["detail"]["plan"]["action_id"] == "START_DEMO_REDIS"
+    assert item["detail"]["plan_canonical"] is False
     assert "忽略探针" in str(item["records"])
     assert ("demo-redis", "start") not in world.operations
 
 
 def test_dual_fault_repairs_one_service_per_approval(client, world):
+    world.actions = ["START_DEMO_MYSQL", "START_DEMO_REDIS"]
     world.verdicts = [Verdict.FAIL, Verdict.PASS]
     created = client.post(
         "/api/scenarios/DUAL_MYSQL_REDIS/inject",

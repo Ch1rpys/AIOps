@@ -445,9 +445,7 @@ class Workflow:
         except ValueError:
             return 0.0
 
-    def accept_plan(
-        self, state, result: Plan, source: str, attempts: int, *, require_repair: bool = False
-    ) -> dict:
+    def accept_plan(self, state, result: Plan, source: str, attempts: int) -> dict:
         scenario = Scenario(state.get("scenario_key", "MYSQL_DOWN"))
         plan_id = new_id("plan")
         payload = result.model_dump(mode="json")
@@ -460,14 +458,13 @@ class Workflow:
                 {"plan_id": plan_id, "attempt": state["attempt"], "source": source, **payload},
             )
         validate_plan(result, scenario)
-        if require_repair and result.action_id != SCENARIOS[scenario].action:
-            raise DomainError("BLOCKED", "已证实的故障还在，这个计划不会修复它")
         self.phase(
             state,
             Status.WAITING_APPROVAL,
             plan=payload,
             plan_id=plan_id,
             plan_source=source,
+            plan_canonical=result.action_id == SCENARIOS[scenario].action,
             model_attempts=attempts,
         )
         with self.store.session() as session, session.begin():
@@ -506,13 +503,7 @@ class Workflow:
                     feedback = repair_feedback(error)
                     continue
                 try:
-                    return self.accept_plan(
-                        state,
-                        result,
-                        "model",
-                        attempt,
-                        require_repair=remaining_fault(collected, scenario),
-                    )
+                    return self.accept_plan(state, result, "model", attempt)
                 except DomainError as error:
                     last_error = error
                     feedback = repair_feedback(error)

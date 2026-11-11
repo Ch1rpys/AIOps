@@ -64,6 +64,7 @@ async function request<T>(
 
 export const api = {
   health: () => request<Health>('/health'),
+  actionCatalog: () => request<{ count: number; note: string }>('/action-catalog'),
   scenarios: () => request<Scenario[]>('/scenarios'),
   incidents: (
     filters: { status?: Status; scenario?: ScenarioKey; limit?: number; offset?: number } = {},

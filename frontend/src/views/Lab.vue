@@ -19,6 +19,7 @@ const busy = ref(false);
 const injectingKey = ref<string | null>(null);
 const confirmation = ref<Scenario | null>(null);
 const poison = ref(false);
+const catalogCount = ref<number | null>(null);
 const showBaselineDetails = ref(false);
 const injectKeys = new Map<ScenarioKey, string>();
 
@@ -50,6 +51,11 @@ async function loadScenarios() {
   error.value = '';
   try {
     scenarios.value = await api.scenarios();
+    try {
+      catalogCount.value = (await api.actionCatalog()).count;
+    } catch {
+      catalogCount.value = null;
+    }
   } catch (cause) {
     error.value = errorMessage(cause);
   } finally {
@@ -151,6 +157,9 @@ onMounted(loadScenarios);
   <!-- 故障场景卡片区 -->
   <div class="section-heading" style="margin-top: 8px">
     <h2>选择故障场景</h2>
+    <span v-if="catalogCount" class="muted text-12">
+      修复目录 {{ catalogCount }} 条。目录外的命令不会执行；目录内的其他路线，复测通过才算修好。
+    </span>
   </div>
 
   <ElSkeleton v-if="scenariosLoading && !scenarios.length" :rows="5" animated />

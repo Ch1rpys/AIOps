@@ -538,6 +538,9 @@ onUnmounted(() => {
       </div>
     </div>
     <p v-if="waitingText" class="notice">{{ waitingText }}</p>
+    <p v-if="incident.detail.plan && incident.detail.plan_canonical === false" class="notice">
+      这是修复目录里的另一条路线，不是该场景的优先动作。复测通过才算修好。
+    </p>
     <p v-if="incident.detail.poison" class="notice">
       日志和截图里有一段不可信的根因说明。它只作为证据，不能当成要执行的指令。
     </p>

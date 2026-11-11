@@ -17,6 +17,7 @@ from app.schemas.domain import (
     Scenario,
     Status,
 )
+from app.services.action_catalog import CATALOG
 from app.services.metrics import adversarial_closed_loop, end_to_end_summary
 from app.services.review import build_review, incident_impact_graph, render_review_markdown
 
@@ -62,6 +63,14 @@ def health(service=Depends(platform)):
 @router.get("/lab/status")
 def lab_status(service=Depends(platform)):
     return service.environment()
+
+
+@router.get("/action-catalog")
+def action_catalog():
+    return {
+        "count": len(CATALOG),
+        "note": "只收目录中的编号。另一条目录路线可以批准，复测通过才算修好。",
+    }
 
 
 @router.get("/scenarios")

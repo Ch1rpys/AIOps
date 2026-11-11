@@ -123,6 +123,7 @@ export interface Incident extends IncidentSummary {
     diagnosis?: Diagnosis;
     diagnosis_source?: string;
     plan_source?: string;
+    plan_canonical?: boolean;
     repair_note?: string | null;
     poison?: boolean;
     model_error?: { code: string; message: string };
