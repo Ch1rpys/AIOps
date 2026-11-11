@@ -17,7 +17,7 @@ from app.schemas.domain import (
     Scenario,
     Status,
 )
-from app.services.metrics import end_to_end_summary
+from app.services.metrics import adversarial_closed_loop, end_to_end_summary
 from app.services.review import build_review, incident_impact_graph, render_review_markdown
 
 router = APIRouter(prefix="/api")
@@ -242,10 +242,10 @@ def evaluation_view(request: Request) -> bool:
     return True
 
 
-def run_evaluation_safely(service, scenario, arms, attachment_ids=None) -> None:
+def run_evaluation_safely(service, scenario, arms, attachment_ids=None, cohort="standard") -> None:
     """后台执行评测：异常只记录，不让后台任务把响应周期搞崩。"""
     try:
-        service.run_experiment(scenario, arms, attachment_ids or [])
+        service.run_experiment(scenario, arms, attachment_ids or [], cohort)
     except DomainError as error:
         # 不打印场景：真值不进日志（§4.1）。
         logger.error("evaluation_failed code=%s", error.code)
@@ -297,8 +297,12 @@ def create_evaluation_run(
         )
     # 幂等指纹必须覆盖全部会影响实验内容的输入：截图换了就不是同一批实验。
     scope = "evaluation"
+    arms = list(body.arms)
+    if body.cohort == "adversarial" and "L" not in arms:
+        arms.append("L")
     fingerprint = (
-        f"{body.scenario.value}:{','.join(body.arms)}:{','.join(sorted(body.attachment_ids))}"
+        f"{body.cohort}:{body.scenario.value}:{','.join(arms)}:"
+        f"{','.join(sorted(body.attachment_ids))}"
     )
     with platform_service.store.session() as session:
         previous = platform_service.store.receipt(session, key, scope, fingerprint)
@@ -311,12 +315,15 @@ def create_evaluation_run(
     response = {
         "accepted": True,
         "scenario": body.scenario.value,
-        "arms": body.arms,
+        "arms": arms,
+        "cohort": body.cohort,
         "status": "QUEUED",
     }
     with platform_service.store.session() as session, session.begin():
         platform_service.store.save_receipt(session, key, scope, fingerprint, response)
-    tasks.add_task(run_evaluation_safely, service, body.scenario, body.arms, body.attachment_ids)
+    tasks.add_task(
+        run_evaluation_safely, service, body.scenario, arms, body.attachment_ids, body.cohort
+    )
     return response
 
 
@@ -336,7 +343,23 @@ def list_evaluation_runs(
 def evaluation_summary(service=Depends(evaluation)):
     """纯诊断对照与端到端对照的指标分开呈现，不混为一谈。"""
     summary = service.store.evaluation_summary()
-    summary["end_to_end"] = end_to_end_summary(service.store)
+    end_to_end = end_to_end_summary(service.store)
+    extra = adversarial_closed_loop(service.store)
+    if extra["measured"]:
+        # 对抗闭环臂的非法提议并进错误处置提议数，避免这条计数被显示成「没有问过」。
+        proposals = end_to_end["proposals"] + extra["proposals"]
+        illegal = end_to_end["illegal_proposals"] + extra["illegal_proposals"]
+        blocked = end_to_end["blocked_proposals"] + extra["blocked_proposals"]
+        end_to_end["proposals"] = proposals
+        end_to_end["illegal_proposals"] = illegal
+        end_to_end["blocked_proposals"] = blocked
+        end_to_end["illegal_proposal_rate"] = round(illegal / proposals, 4) if proposals else None
+        end_to_end["block_rate"] = round(blocked / illegal, 4) if illegal else None
+        end_to_end["note"] = (
+            "端到端指标统计闭环路径的处置提议，并计入对抗样本闭环臂被白名单拦住的提议。"
+            "非法动作执行次数见对抗样本一节，不在这里记成 0。"
+        )
+    summary["end_to_end"] = end_to_end
     return summary
 
 

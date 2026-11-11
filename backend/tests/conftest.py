@@ -34,6 +34,8 @@ class TestWorld:
         Scenario.MYSQL_DOWN: ("mysql_select_1", "app_db_check"),
         Scenario.REDIS_DOWN: ("redis_roundtrip", "app_cache_check"),
         Scenario.NGINX_502: ("nginx_hello",),
+        Scenario.NGINX_UPSTREAM: ("nginx_hello",),
+        Scenario.APP_HTTP_500: ("nginx_hello",),
     }
     BASELINE_PROBES = (
         "mysql_select_1",
@@ -66,6 +68,10 @@ class TestWorld:
         self.window_instability = False
         # 停止操作不生效：用来模拟「注入了但故障没出现」。
         self.stop_has_no_effect = False
+        self.nginx_profile = "healthy"
+        self.app_mode = "ok"
+        self.closed_root_cause = "MYSQL_SERVICE_STOPPED"
+        self.planner_error = False
         self.vision_observation = VisionObservation()
         self.vision_error = None
 
@@ -97,6 +103,25 @@ class TestWorld:
             self.stopped_service = None
         return {"exit_code": 0, "service": service, "operation": operation, "mode": "TEST/MOCK"}
 
+    def apply_nginx_upstream(self, profile):
+        if profile not in {"healthy", "misdirected"}:
+            raise ValueError(profile)
+        self.nginx_profile = profile
+        self.operations.append(("nginx-upstream", profile))
+        return {
+            "exit_code": 0,
+            "profile": profile,
+            "operation": "nginx_upstream",
+            "mode": "TEST/MOCK",
+        }
+
+    def apply_app_mode(self, mode):
+        if mode not in {"ok", "http_500"}:
+            raise ValueError(mode)
+        self.app_mode = mode
+        self.operations.append(("app-mode", mode))
+        return {"exit_code": 0, "mode": mode, "operation": "app_mode"}
+
     def logs(self, service):
         return f"TEST/MOCK {service} connection refused password=private"
 
@@ -110,6 +135,16 @@ class TestWorld:
         observed = {"mode": "TEST/MOCK"}
         if name == "nginx_hello" and self.stopped_service == "demo-app":
             observed = {"status_code": 502, "mode": "TEST/MOCK"}
+        if (
+            name == "nginx_hello"
+            and self.nginx_profile == "misdirected"
+            and not self.stopped_service
+        ):
+            verdict = Verdict.FAIL
+            observed = {"status_code": 502, "mode": "TEST/MOCK"}
+        if name == "nginx_hello" and self.app_mode == "http_500" and not self.stopped_service:
+            verdict = Verdict.FAIL
+            observed = {"status_code": 500, "mode": "TEST/MOCK"}
         return Probe(name=name, verdict=verdict, observed=observed)
 
     def mysql(self):
@@ -154,7 +189,7 @@ class TestWorld:
         if self.requested_checks:
             requests = list(self.requested_checks.pop(0))
         diagnosis = Diagnosis(
-            root_cause="MYSQL_SERVICE_STOPPED",
+            root_cause=self.closed_root_cause,
             summary="TEST/MOCK 数据库已停止",
             evidence_ids=[e["id"] for e in context["evidence"]],
             confidence=0.9,
@@ -168,6 +203,10 @@ class TestWorld:
         return diagnosis
 
     def plan(self, context):
+        if self.planner_error:
+            from app.config import DomainError
+
+            raise DomainError("AI_UNAVAILABLE", "TEST/MOCK 规划器不可用", 503)
         return Plan(
             action_id=self.action,
             target="demo-mysql",
@@ -247,7 +286,7 @@ class TestWorld:
             attachments=attachments,
         )
         evaluation = EvaluationService(
-            settings, store, self, self, evidence, self, attachments=attachments
+            settings, store, self, self, evidence, self, attachments=attachments, planner=self
         )
         return platform, evaluation
 

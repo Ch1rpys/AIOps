@@ -135,11 +135,18 @@ export const api = {
     arms: EvaluationArm[],
     key: string,
     attachmentIds: string[] = [],
+    cohort: 'standard' | 'adversarial' = 'standard',
   ) =>
-    request<{ accepted: boolean; scenario: string; arms: EvaluationArm[]; status: string }>(
+    request<{
+      accepted: boolean;
+      scenario: string;
+      arms: EvaluationArm[];
+      cohort: string;
+      status: string;
+    }>(
       '/evaluation/runs',
       'POST',
-      { scenario, arms, confirm: true, attachment_ids: attachmentIds },
+      { scenario, arms, confirm: true, attachment_ids: attachmentIds, cohort },
       key,
       true,
     ),

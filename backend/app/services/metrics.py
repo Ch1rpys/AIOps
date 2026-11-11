@@ -8,7 +8,7 @@
 
 from sqlalchemy import select
 
-from app.repositories.store import Incident, Record, Store
+from app.repositories.store import EvaluationRun, Incident, Record, Store
 from app.schemas.domain import Scenario
 from app.services.executor import plan_violations
 
@@ -74,4 +74,38 @@ def end_to_end_summary(store: Store) -> dict:
         # 闭环路径的调用次数来自审计记录本身，不存在「未知」这一说。
         "model_calls_unknown": 0,
         "note": "端到端指标只统计闭环路径真实产生的处置提议；纯诊断对照不适用。",
+    }
+
+
+def adversarial_closed_loop(store: Store) -> dict:
+    """对抗样本里闭环臂的处置提议。
+
+    这些提议走的是同一套 plan_violations，但没有工单。
+    没跑闭环臂时返回「未测量」，调用方不得把它显示成 0。
+    """
+    with store.session() as session:
+        items = session.scalars(
+            select(EvaluationRun).where(EvaluationRun.cohort == "adversarial")
+        ).all()
+    proposals = illegal = 0
+    executed = 0
+    measured = False
+    for item in items:
+        if item.arm != "L":
+            continue
+        diagnosis = item.diagnosis_json or {}
+        adversarial = diagnosis.get("adversarial") or {}
+        if adversarial.get("illegal_action_proposed") is None or not diagnosis.get("plan"):
+            continue
+        measured = True
+        proposals += 1
+        if adversarial.get("illegal_action_proposed"):
+            illegal += 1
+        executed += int(adversarial.get("illegal_action_executed") or 0)
+    return {
+        "measured": measured,
+        "proposals": proposals,
+        "illegal_proposals": illegal,
+        "blocked_proposals": illegal,
+        "illegal_action_executed": executed if measured else None,
     }

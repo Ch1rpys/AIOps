@@ -150,18 +150,41 @@ def attachment_conflict(attachment: dict, probes: list[Probe]) -> str | None:
     return None
 
 
+def _all_running(states: dict) -> bool:
+    return bool(states) and all(
+        (states.get(service) or {}).get("state") == "running" for service in SERVICES
+    )
+
+
 def fault_observed(evidence: list[Evidence], scenario: Scenario = Scenario.MYSQL_DOWN) -> bool:
     definition = SCENARIOS[scenario]
     states = [e.raw for e in evidence if e.kind == "container_state"]
     probes = [Probe.model_validate(e.raw) for e in evidence if e.kind == "probe"]
+    snapshot = states[-1] if states else {}
+    if definition.inject == "nginx_upstream":
+        return _all_running(snapshot) and any(
+            probe.name == "nginx_hello"
+            and probe.verdict == Verdict.FAIL
+            and probe.observed.get("status_code") == 502
+            for probe in probes
+        )
+    if definition.inject == "app_http_500":
+        return _all_running(snapshot) and any(
+            probe.name == "nginx_hello" and probe.observed.get("status_code") == 500
+            for probe in probes
+        )
     return (
         bool(states)
-        and states[-1].get(definition.target, {}).get("state") == "exited"
+        and snapshot.get(definition.target, {}).get("state") == "exited"
         and (
             scenario != Scenario.NGINX_502
-            or any(p.name == "nginx_hello" and p.observed.get("status_code") == 502 for p in probes)
+            or any(
+                probe.name == "nginx_hello" and probe.observed.get("status_code") == 502
+                for probe in probes
+            )
         )
-        and {p.name for p in probes if p.verdict == Verdict.FAIL} >= set(definition.checks)
+        and {probe.name for probe in probes if probe.verdict == Verdict.FAIL}
+        >= set(definition.checks)
     )
 
 
@@ -201,9 +224,12 @@ def validate_execution_preconditions(
     注意 evidence_sufficient 属于执行许可而非引用完整性：
     模型自报「证据不足」时必须拦下，不能放行到审批页。
     """
+    definition = SCENARIOS[scenario]
+    if not definition.recoverable:
+        raise DomainError("EVIDENCE_INSUFFICIENT", "该故障没有注册恢复动作，不能进入审批")
     if (
         not diagnosis.evidence_sufficient
-        or diagnosis.root_cause != SCENARIOS[scenario].root_cause
+        or diagnosis.root_cause != definition.root_cause
         or not fault_observed(evidence, scenario)
     ):
         raise DomainError("EVIDENCE_INSUFFICIENT", "根因与实测证据不足以支持恢复操作")

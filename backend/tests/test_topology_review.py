@@ -9,6 +9,8 @@ from app.services.topology import (
     CONFIGURED,
     INFERRED,
     OBSERVED,
+    contradicts,
+    explain_fault,
     load_topology,
     render_general_runbook,
 )
@@ -48,8 +50,82 @@ def test_general_runbook_has_no_scenario_markers():
         "START_DEMO_MYSQL",
         "START_DEMO_REDIS",
         "START_DEMO_APP",
+        "NGINX_UPSTREAM",
+        "APP_HTTP_500",
+        "NGINX_UPSTREAM_MISCONFIGURED",
+        "RESTORE_NGINX_UPSTREAM",
     ):
         assert token not in content
+
+
+def _states(app="running", mysql="running"):
+    return {
+        "demo-mysql": {"state": mysql},
+        "demo-redis": {"state": "running"},
+        "demo-app": {"state": app},
+        "demo-nginx": {"state": "running"},
+    }
+
+
+def test_db_failure_with_healthy_hello_points_at_mysql_not_the_startup_chain():
+    explanation = explain_fault(
+        [
+            {"name": "app_db_check", "verdict": "FAIL", "observed": {"status_code": 503}},
+            {"name": "mysql_select_1", "verdict": "FAIL", "observed": {}},
+            {"name": "nginx_hello", "verdict": "PASS", "observed": {"status_code": 200}},
+            {"name": "app_health", "verdict": "PASS", "observed": {}},
+        ],
+        _states(mysql="exited"),
+    )
+    assert explanation["decisive"] is True
+    assert explanation["root_cause"] == "MYSQL_SERVICE_STOPPED"
+    assert "demo-app" in explanation["ruled_out"]
+    assert "启动链" in explanation["reason"]
+    assert contradicts("REDIS_SERVICE_STOPPED", explanation) is True
+    assert contradicts("MYSQL_SERVICE_STOPPED", explanation) is False
+    assert contradicts("INSUFFICIENT_EVIDENCE", explanation) is False
+
+
+def test_running_app_with_proxy_502_is_not_an_app_stop():
+    explanation = explain_fault(
+        [
+            {"name": "nginx_hello", "verdict": "FAIL", "observed": {"status_code": 502}},
+            {"name": "app_health", "verdict": "PASS", "observed": {"status_code": 200}},
+        ],
+        _states(),
+    )
+    assert explanation["root_cause"] == "NGINX_UPSTREAM_MISCONFIGURED"
+    assert "demo-app" in explanation["ruled_out"]
+
+
+def test_http_500_while_the_app_is_running_abstains():
+    explanation = explain_fault(
+        [
+            {"name": "nginx_hello", "verdict": "FAIL", "observed": {"status_code": 500}},
+            {"name": "app_health", "verdict": "PASS", "observed": {"status_code": 200}},
+        ],
+        _states(),
+    )
+    assert explanation["decisive"] is True
+    assert explanation["abstain"] is True
+    assert contradicts("UPSTREAM_APP_STOPPED", explanation) is True
+    assert contradicts("OTHER", explanation) is False
+
+
+def test_conflicting_root_cause_still_offers_registered_repair(client, world):
+    world.closed_root_cause = "REDIS_SERVICE_STOPPED"
+    incident_id = injected(client)
+    client.post(f"/api/incidents/{incident_id}/diagnose")
+    item = client.get(f"/api/incidents/{incident_id}").json()
+    assert item["status"] == "WAITING_APPROVAL"
+    assert item["detail"]["plan"]["action_id"] == "START_DEMO_MYSQL"
+    assert not item["detail"].get("error")
+    assert len(world.diagnosis_contexts) == 2
+    assert world.operations == [("demo-mysql", "stop")]
+    assert item["detail"]["rule_ms"] == 0 or item["detail"]["rule_ms"] >= 0
+    graph = client.get(f"/api/incidents/{incident_id}/impact").json()
+    assert graph["rule_explanation"]["root_cause"] == "MYSQL_SERVICE_STOPPED"
+    assert graph["model_inference"]["root_cause"] == "REDIS_SERVICE_STOPPED"
 
 
 def test_impact_graph_separates_the_three_relation_kinds(client, world):

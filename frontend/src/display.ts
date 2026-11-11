@@ -26,11 +26,15 @@ export const scenarioLabels: Record<string, string> = {
   MYSQL_DOWN: 'MySQL 故障',
   REDIS_DOWN: 'Redis 故障',
   NGINX_502: 'Nginx 代理故障',
+  NGINX_UPSTREAM: 'Nginx 上游配置错误',
+  APP_HTTP_500: '应用固定 500',
 };
 
 export const rootCauseLabels: Record<string, string> = {
   MYSQL_SERVICE_STOPPED: 'MySQL 服务已停止',
   REDIS_SERVICE_STOPPED: 'Redis 服务已停止',
+  UPSTREAM_APP_STOPPED: '上游应用已停止',
+  NGINX_UPSTREAM_MISCONFIGURED: 'Nginx 上游配置错误',
   APP_SERVICE_STOPPED: '应用服务已停止',
 };
 
@@ -38,6 +42,8 @@ export const actionLabels: Record<string, string> = {
   START_DEMO_MYSQL: '启动 MySQL',
   START_DEMO_REDIS: '启动 Redis',
   START_DEMO_APP: '启动应用',
+  RESTORE_NGINX_UPSTREAM: '恢复 Nginx 上游配置',
+  RESTORE_APP_MODE: '恢复应用为正常响应',
   NO_ACTION: '不执行恢复动作',
 };
 
@@ -55,11 +61,11 @@ export const verdictLabels: Record<string, string> = {
 
 export const probeLabels: Record<string, string> = {
   mysql_select_1: 'MySQL 连通性 (SELECT 1)',
-  mysql_app_check: '应用数据库依赖 (/db-check)',
-  redis_ping: 'Redis 连通性 (PING)',
-  redis_ttl_check: 'Redis 读写验证 (SET/GET)',
-  redis_app_check: '应用缓存依赖 (/cache-check)',
-  nginx_proxy_check: 'Nginx 代理检查 (/api/hello)',
+  app_db_check: '应用数据库检查 (/db-check)',
+  redis_roundtrip: 'Redis 读写',
+  app_cache_check: '应用缓存检查 (/cache-check)',
+  nginx_hello: 'Nginx 代理 (/api/hello)',
+  app_health: '应用健康检查',
 };
 
 export const evidenceKindLabels: Record<string, string> = {

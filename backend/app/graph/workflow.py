@@ -11,6 +11,7 @@ from langgraph.types import interrupt
 
 from app.agents.evidence import (
     EvidenceAgent,
+    fault_observed,
     observations_available,
     validate_evidence_integrity,
     validate_execution_preconditions,
@@ -19,6 +20,7 @@ from app.config import CHECK_IDS, DomainError, Settings
 from app.integrations.models import DiagnosisProvider, ModelTrace, PlannerProvider
 from app.integrations.probes import Probes
 from app.repositories.store import Store
+from app.scenarios import SCENARIOS
 from app.schemas.domain import (
     Diagnosis,
     Evidence,
@@ -30,6 +32,15 @@ from app.schemas.domain import (
     now,
 )
 from app.services.executor import ActionExecutor, validate_plan
+from app.services.repair import (
+    DIAGNOSIS_ATTEMPTS,
+    PLAN_ATTEMPTS,
+    probes_support_registered_fix,
+    registered_diagnosis,
+    registered_plan,
+    repair_feedback,
+)
+from app.services.topology import contradicts, explain_from_evidence
 
 logger = logging.getLogger("aiops.workflow")
 
@@ -44,6 +55,9 @@ class IncidentState(TypedDict, total=False):
     supplements: list[dict]
     attachment_recheck_count: int
     attachment_recheck_pending: bool
+    topology_recheck_count: int
+    topology_recheck_pending: bool
+    topology_recheck_checks: list[str]
     started_at: str
     evidence: list[dict]
     diagnosis: dict
@@ -92,7 +106,7 @@ class Workflow:
         # 执行许可校验放在补采之后：模型请求补采时必然自报「证据不足」，
         # 若在诊断节点就校验，补采永远等不到机会（§6.2）。
         builder.add_node("authorize", self.authorize)
-        builder.add_conditional_edges("authorize", lambda s: END if s.get("error") else "plan")
+        builder.add_conditional_edges("authorize", self.after_authorize)
         builder.add_conditional_edges("plan", lambda s: END if s.get("error") else "approval")
         builder.add_conditional_edges(
             "approval", lambda s: "execute" if s["decision"] == "approve" else END
@@ -215,10 +229,10 @@ class Workflow:
             # 冲突补查后直接复判：冲突提示不能被「证据不足」盖掉。
             return "diagnose"
         # 第二轮容器可能已运行；仍需把失败业务探针交给诊断，再校验根因是否支持动作。
-        if observations_available(
-            [Evidence.model_validate(e) for e in state["evidence"]],
-            Scenario(state.get("scenario_key", "MYSQL_DOWN")),
-        ):
+        collected = [Evidence.model_validate(e) for e in state["evidence"]]
+        scenario = Scenario(state.get("scenario_key", "MYSQL_DOWN"))
+        # 观测还不完整时，只要该场景的故障已经被探针证实，就继续诊断，不在采证处停住。
+        if observations_available(collected, scenario) or fault_observed(collected, scenario):
             return "diagnose"
         if state["collect_count"] < 2:
             return "collect"
@@ -246,34 +260,75 @@ class Workflow:
                         "attachment_recheck_count": 1,
                         "attachment_recheck_pending": True,
                     }
-                raise DomainError("EVIDENCE_CONFLICT", conflict)
-            trace = ModelTrace()
-            result = self.diagnosis.diagnose(
-                {
-                    "incident_id": state["incident_id"],
-                    "scenario_key": state.get("scenario_key", "MYSQL_DOWN"),
-                    "attempt": state["attempt"],
-                    "evidence": state["evidence"],
-                    "previous_verification": state.get("verification"),
-                    "previous_execution": state.get("execution"),
-                },
-                trace=trace,
-            )
-            # 语义校验拦截前保存模型结论，UNKNOWN 也必须能回溯其依据与疑点。
+                collected = [Evidence.model_validate(item) for item in state["evidence"]]
+                scenario = Scenario(state.get("scenario_key", "MYSQL_DOWN"))
+                if not fault_observed(collected, scenario):
+                    raise DomainError("EVIDENCE_CONFLICT", conflict)
+            collected = [Evidence.model_validate(e) for e in state["evidence"]]
+            scenario = Scenario(state.get("scenario_key", "MYSQL_DOWN"))
+            context = {
+                "incident_id": state["incident_id"],
+                "scenario_key": state.get("scenario_key", "MYSQL_DOWN"),
+                "attempt": state["attempt"],
+                "evidence": state["evidence"],
+                "previous_verification": state.get("verification"),
+                "previous_execution": state.get("execution"),
+            }
+            feedback = None
+            last_error: DomainError | None = None
+            for attempt in range(1, DIAGNOSIS_ATTEMPTS + 1):
+                trace = ModelTrace()
+                if feedback:
+                    context = {**context, "repair_note": feedback}
+                try:
+                    result = self.diagnosis.diagnose(context, trace=trace)
+                except DomainError as error:
+                    last_error = error
+                    feedback = repair_feedback(error)
+                    continue
+                try:
+                    validate_evidence_integrity(result, collected)
+                except DomainError as error:
+                    last_error = error
+                    feedback = repair_feedback(error)
+                    continue
+                # 语义校验拦截前保存模型结论，UNKNOWN 也必须能回溯其依据与疑点。
+                payload = result.model_dump(mode="json")
+                self.phase(
+                    state,
+                    Status.DIAGNOSING,
+                    diagnosis=payload,
+                    diagnosis_source="model",
+                    model_attempts=attempt,
+                    attachment_recheck_pending=False,
+                    repair_note=None,
+                    # 模型原始输出单独留痕：审计要的是模型真的说了什么，不是我们解析后的结论。
+                    raw_model_output=trace.raw.get("analysis"),
+                    model_usage=trace.usage,
+                )
+                return {
+                    "diagnosis": payload,
+                    "model_attempts": attempt,
+                    "attachment_recheck_pending": False,
+                }
+            fallback = registered_diagnosis(collected, scenario)
+            if fallback is None or last_error is None:
+                raise last_error or DomainError("AI_UNAVAILABLE", "诊断没有可用结论", 503)
+            payload = fallback.model_dump(mode="json")
+            note = "模型没有给出可用结论。已按探针和该场景注册的恢复动作继续，批准后才会执行。"
             self.phase(
                 state,
                 Status.DIAGNOSING,
-                diagnosis=result.model_dump(mode="json"),
+                diagnosis=payload,
+                diagnosis_source="registered_repair",
+                model_attempts=DIAGNOSIS_ATTEMPTS,
+                model_error={"code": last_error.code, "message": last_error.message},
+                repair_note=note,
                 attachment_recheck_pending=False,
-                # 模型原始输出单独留痕：审计要的是模型真的说了什么，不是我们解析后的结论。
-                raw_model_output=trace.raw.get("analysis"),
-                model_usage=trace.usage,
             )
-            # 闭环入口同时要求引用完整性与执行许可；盲诊路径只查完整性，另走独立入口。
-            collected = [Evidence.model_validate(e) for e in state["evidence"]]
-            validate_evidence_integrity(result, collected)
             return {
-                "diagnosis": result.model_dump(mode="json"),
+                "diagnosis": payload,
+                "model_attempts": DIAGNOSIS_ATTEMPTS,
                 "attachment_recheck_pending": False,
             }
 
@@ -281,15 +336,30 @@ class Workflow:
 
     # ---- M3：受限主动补采 ---------------------------------------------------
 
+    def after_authorize(self, state):
+        if state.get("error"):
+            return END
+        if state.get("topology_recheck_pending"):
+            return "supplement"
+        return "plan"
+
     def supplement(self, state):
         """按模型请求补采观测。
 
         只能补采注册过的检查 ID，且不重复采集已有证据；
         轮次与总耗时都由配置封顶，超限就不再补采并如实记录原因。
+        拓扑解释与模型矛盾时，也走这一次补采：复测规则点名的探针，然后回到诊断。
         """
 
         def operation():
-            requested = self.pending_requests(state)
+            if state.get("topology_recheck_pending"):
+                requested = [
+                    {"check_id": check_id, "reason": "拓扑解释与模型根因矛盾，复测这条探针"}
+                    for check_id in state.get("topology_recheck_checks") or []
+                    if check_id in CHECK_IDS
+                ][: self.settings.supplement_max_checks]
+            else:
+                requested = self.pending_requests(state)
             collected = []
             for request in requested:
                 probe = self.probes.by_name(request["check_id"])
@@ -315,6 +385,7 @@ class Workflow:
                 "collect_count": state.get("collect_count", 0) + 1,
                 "supplement_count": state.get("supplement_count", 0) + 1,
                 "supplements": [*(state.get("supplements") or []), record],
+                "topology_recheck_pending": False,
             }
 
         return self.guarded(state, Status.COLLECTING, operation)
@@ -366,68 +437,162 @@ class Workflow:
         except ValueError:
             return 0.0
 
+    def accept_plan(
+        self, state, result: Plan, source: str, attempts: int, *, require_repair: bool = False
+    ) -> dict:
+        scenario = Scenario(state.get("scenario_key", "MYSQL_DOWN"))
+        plan_id = new_id("plan")
+        payload = result.model_dump(mode="json")
+        # 先留痕再校验：被白名单门禁拦下的非法提议也必须计数。
+        with self.store.session() as session, session.begin():
+            self.store.audit(
+                session,
+                state["incident_id"],
+                "plan_proposal",
+                {"plan_id": plan_id, "attempt": state["attempt"], "source": source, **payload},
+            )
+        validate_plan(result, scenario)
+        if require_repair and result.action_id != SCENARIOS[scenario].action:
+            raise DomainError("BLOCKED", "已证实的故障还在，这个计划不会修复它")
+        self.phase(
+            state,
+            Status.WAITING_APPROVAL,
+            plan=payload,
+            plan_id=plan_id,
+            plan_source=source,
+            model_attempts=attempts,
+        )
+        with self.store.session() as session, session.begin():
+            self.store.audit(
+                session,
+                state["incident_id"],
+                "plan",
+                {"plan_id": plan_id, "attempt": state["attempt"], "source": source, **payload},
+            )
+        return {"plan": payload, "plan_id": plan_id, "model_attempts": attempts}
+
     def plan(self, state):
         def operation():
-            # 截图与当前探针冲突时先补查，不进入恢复审批。
+            scenario = Scenario(state.get("scenario_key", "MYSQL_DOWN"))
+            collected = [Evidence.model_validate(item) for item in state["evidence"]]
+            # 截图不能决定恢复。探针没有证实故障时才停；故障已证实就继续修。
             conflict = self.attachment_conflict(state)
-            if conflict:
+            if conflict and not fault_observed(collected, scenario):
                 raise DomainError("EVIDENCE_CONFLICT", conflict)
-            result = self.planner.plan(
-                {
-                    "diagnosis": state["diagnosis"],
-                    "scenario_key": state.get("scenario_key", "MYSQL_DOWN"),
-                    "evidence": state["evidence"],
-                    "previous_verification": state.get("verification"),
-                    "previous_execution": state.get("execution"),
-                }
+            context = {
+                "diagnosis": state["diagnosis"],
+                "scenario_key": state.get("scenario_key", "MYSQL_DOWN"),
+                "evidence": state["evidence"],
+                "previous_verification": state.get("verification"),
+                "previous_execution": state.get("execution"),
+            }
+            feedback = None
+            last_error: DomainError | None = None
+            for attempt in range(1, PLAN_ATTEMPTS + 1):
+                if feedback:
+                    context = {**context, "repair_note": feedback}
+                try:
+                    result = self.planner.plan(context)
+                except DomainError as error:
+                    last_error = error
+                    feedback = repair_feedback(error)
+                    continue
+                try:
+                    return self.accept_plan(
+                        state,
+                        result,
+                        "model",
+                        attempt,
+                        require_repair=fault_observed(collected, scenario),
+                    )
+                except DomainError as error:
+                    last_error = error
+                    feedback = repair_feedback(error)
+            fallback = (
+                registered_plan(scenario)
+                if probes_support_registered_fix(collected, scenario)
+                else None
             )
-            plan_id = new_id("plan")
-            # 先留痕再校验：被白名单门禁拦下的非法提议也必须计数（§9.1「即使被拦截也要计数」）。
-            with self.store.session() as session, session.begin():
-                self.store.audit(
-                    session,
-                    state["incident_id"],
-                    "plan_proposal",
-                    {
-                        "plan_id": plan_id,
-                        "attempt": state["attempt"],
-                        **result.model_dump(mode="json"),
-                    },
-                )
-            validate_plan(result, Scenario(state.get("scenario_key", "MYSQL_DOWN")))
+            if fallback is None or last_error is None:
+                raise last_error or DomainError("AI_UNAVAILABLE", "规划没有可用结论", 503)
+            note = "模型给出的计划不能执行。已改为该场景已注册的恢复动作，批准后才会执行。"
+            accepted = self.accept_plan(state, fallback, "registered_repair", PLAN_ATTEMPTS)
             self.phase(
-                state, Status.WAITING_APPROVAL, plan=result.model_dump(mode="json"), plan_id=plan_id
+                state,
+                Status.WAITING_APPROVAL,
+                repair_note=note,
+                plan_source="registered_repair",
             )
-            with self.store.session() as session, session.begin():
-                self.store.audit(
-                    session,
-                    state["incident_id"],
-                    "plan",
-                    {
-                        "plan_id": plan_id,
-                        "attempt": state["attempt"],
-                        **result.model_dump(mode="json"),
-                    },
-                )
-            return {"plan": result.model_dump(mode="json"), "plan_id": plan_id}
+            return accepted
 
         return self.guarded(state, Status.PLANNING, operation)
 
-    def authorize(self, state):
-        """执行许可：只有拿到许可的诊断才能进入规划与审批。
+    def continue_repair(self, state, explanation: dict, rule_ms: int) -> dict:
+        note = "模型结论不能直接执行。探针已证实故障，改为该场景已注册的恢复动作，批准后才会执行。"
+        self.phase(state, Status.DIAGNOSING, repair_note=note, rule_ms=rule_ms)
+        return {
+            "topology_explanation": explanation,
+            "rule_ms": rule_ms,
+            "topology_recheck_pending": False,
+        }
 
-        补采预算用尽后仍不自证证据充分，就在这里被拦下 ——
-        闭环入口放行到审批页的门禁不放松（§4.2）。
+    def authorize(self, state):
+        """执行许可。模型与规则矛盾时先补采一次。
+
+        补采后仍矛盾，或模型结论不足以执行时，只要探针已经证实该场景的故障，
+        就不在这里停住，改由注册恢复动作继续。探针没证实故障时才结束。
+        规则解释单独计时，不记成模型调用。
         """
 
         def operation():
             collected = [Evidence.model_validate(e) for e in state["evidence"]]
-            validate_execution_preconditions(
-                Diagnosis.model_validate(state["diagnosis"]),
-                collected,
-                Scenario(state.get("scenario_key", "MYSQL_DOWN")),
+            scenario = Scenario(state.get("scenario_key", "MYSQL_DOWN"))
+            explanation = explain_from_evidence(collected)
+            rule_ms = int(explanation.get("rule_ms") or 0)
+            diagnosis = Diagnosis.model_validate(state["diagnosis"])
+            confirmed = fault_observed(collected, scenario)
+            self.phase(
+                state,
+                Status.DIAGNOSING,
+                topology_explanation=explanation,
+                rule_ms=rule_ms,
             )
-            return {}
+            if contradicts(diagnosis.root_cause, explanation):
+                already = (
+                    state.get("supplement_count", 0) >= 1
+                    or state.get("topology_recheck_count", 0) >= 1
+                )
+                checks = [
+                    check_id
+                    for check_id in explanation.get("cited_checks") or []
+                    if check_id in CHECK_IDS
+                ][: self.settings.supplement_max_checks]
+                if not already and checks:
+                    return {
+                        "topology_recheck_pending": True,
+                        "topology_recheck_count": state.get("topology_recheck_count", 0) + 1,
+                        "topology_recheck_checks": checks,
+                        "topology_explanation": explanation,
+                        "rule_ms": rule_ms,
+                    }
+                if confirmed:
+                    return self.continue_repair(state, explanation, rule_ms)
+                raise DomainError(
+                    "EVIDENCE_CONFLICT",
+                    explanation.get("reason") or "模型根因与拓扑解释矛盾",
+                    details={"topology_explanation": explanation, "rule_ms": rule_ms},
+                )
+            try:
+                validate_execution_preconditions(diagnosis, collected, scenario)
+            except DomainError:
+                if confirmed:
+                    return self.continue_repair(state, explanation, rule_ms)
+                raise
+            return {
+                "topology_explanation": explanation,
+                "rule_ms": rule_ms,
+                "topology_recheck_pending": False,
+            }
 
         return self.guarded(state, Status.DIAGNOSING, operation, label="AUTHORIZING")
 

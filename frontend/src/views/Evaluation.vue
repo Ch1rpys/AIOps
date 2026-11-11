@@ -32,6 +32,7 @@ const notice = ref('');
 const evaluationView = ref(false);
 const scenario = ref<ScenarioKey>('MYSQL_DOWN');
 const arms = ref<EvaluationArm[]>(['A', 'B']);
+const cohort = ref<'standard' | 'adversarial'>('standard');
 const triggering = ref(false);
 const uploading = ref(false);
 const attachmentId = ref('');
@@ -47,6 +48,7 @@ const armLabel: Record<EvaluationArm, string> = {
   A: 'A · 单次诊断',
   B: 'B · 多 Agent 复核',
   C: 'C · 增加视觉证据',
+  L: 'L · 闭环规划',
 };
 
 function percent(value: number | null): string {
@@ -157,6 +159,10 @@ async function uploadAttachment(event: Event) {
   }
 }
 
+function onCohortChange(event: Event) {
+  cohort.value = (event.target as HTMLInputElement).checked ? 'adversarial' : 'standard';
+}
+
 async function trigger() {
   if (!canTrigger.value) {
     error.value = '请先在右上角「设置」中粘贴 ADMIN_TOKEN。';
@@ -170,10 +176,17 @@ async function trigger() {
       error.value = 'C 臂需要先上传截图：没有视觉证据时它等价于 B 臂，是假对照。';
       return;
     }
-    await api.triggerEvaluation(scenario.value, arms.value, `EVAL-${Date.now()}`, [
-      ...(attachmentId.value ? [attachmentId.value] : []),
-    ]);
-    notice.value = '实验已触发：注入故障 → 固化证据快照 → 各臂在同一快照上诊断。';
+    await api.triggerEvaluation(
+      scenario.value,
+      arms.value,
+      `EVAL-${Date.now()}`,
+      [...(attachmentId.value ? [attachmentId.value] : [])],
+      cohort.value,
+    );
+    notice.value =
+      cohort.value === 'adversarial'
+        ? '对抗样本已触发：日志和截图里写入了错误根因。它不计入普通正确率。'
+        : '实验已触发：注入故障 → 固化证据快照 → 各臂在同一快照上诊断。';
     await load();
   } catch (cause) {
     error.value = errorMessage(cause);
@@ -224,7 +237,18 @@ onUnmounted(() => {
           <option value="MYSQL_DOWN">MySQL 服务停止</option>
           <option value="REDIS_DOWN">Redis 服务停止</option>
           <option value="NGINX_502">Nginx 上游不可用</option>
+          <option value="NGINX_UPSTREAM">Nginx 上游配置错误</option>
+          <option value="APP_HTTP_500">应用固定 500（负例，不恢复）</option>
         </select>
+      </label>
+      <label class="inline-label">
+        <input
+          type="checkbox"
+          :checked="cohort === 'adversarial'"
+          :disabled="triggering"
+          @change="onCohortChange"
+        />
+        <span>对抗样本（投毒日志和截图，不计入正确率）</span>
       </label>
       <label>
         <span>实验臂</span>
@@ -380,6 +404,52 @@ onUnmounted(() => {
       {{ summary.end_to_end.note }}
     </p>
 
+    <div v-if="summary?.adversarial" class="section-heading" style="margin-top: 16px">
+      <h2>对抗样本（不计入正确率）</h2>
+    </div>
+    <div v-if="summary?.adversarial" class="filter-bar">
+      <span class="muted text-12">样本</span>
+      <span class="text-12">{{ summary.adversarial.runs }} 条</span>
+      <span class="muted text-12">根因被带偏</span>
+      <span class="text-12">
+        {{
+          summary.adversarial.root_cause_biased === null
+            ? '不适用'
+            : `${summary.adversarial.root_cause_biased}（${((summary.adversarial.root_cause_biased_rate ?? 0) * 100).toFixed(1)}%）`
+        }}
+      </span>
+      <span class="muted text-12">非法动作提议</span>
+      <span class="text-12">
+        {{
+          summary.adversarial.illegal_action_proposed === null
+            ? '不适用'
+            : `${summary.adversarial.illegal_action_proposed} 条`
+        }}
+      </span>
+      <span class="muted text-12">非法动作执行</span>
+      <span class="text-12">
+        {{
+          summary.adversarial.illegal_action_executed === null
+            ? '不适用'
+            : `${summary.adversarial.illegal_action_executed} 次`
+        }}
+      </span>
+    </div>
+    <p v-if="summary?.adversarial" class="help-text">{{ summary.adversarial.note }}</p>
+
+    <div v-if="summary?.abstain" class="section-heading" style="margin-top: 16px">
+      <h2>负例（不计入正确率）</h2>
+    </div>
+    <div v-if="summary?.abstain" class="filter-bar">
+      <span class="muted text-12">样本</span>
+      <span class="text-12">{{ summary.abstain.runs }} 条</span>
+      <span class="muted text-12">拒答或 OTHER</span>
+      <span class="text-12">
+        {{ summary.abstain.abstained === null ? '不适用' : `${summary.abstain.abstained} 条` }}
+      </span>
+    </div>
+    <p v-if="summary?.abstain" class="help-text">{{ summary.abstain.note }}</p>
+
     <ul v-if="summary" class="help-text" style="margin-top: 10px">
       <li v-for="note in summary.notes" :key="note">{{ note }}</li>
     </ul>
@@ -420,7 +490,11 @@ onUnmounted(() => {
           <template v-for="row in runs" :key="row.id">
             <tr>
               <td class="mono" :title="row.id">{{ shortId(row.id) }}</td>
-              <td>{{ row.arm }}</td>
+              <td>
+                {{ armLabel[row.arm] ?? row.arm }}
+                <div v-if="row.cohort === 'adversarial'" class="muted text-12">对抗样本</div>
+                <div v-else-if="row.cohort === 'abstain'" class="muted text-12">负例</div>
+              </td>
               <td>
                 {{ row.root_cause ? rootCauseName(row.root_cause) : '—' }}
                 <div v-if="row.summary" class="muted text-12">{{ row.summary }}</div>

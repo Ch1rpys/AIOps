@@ -6,6 +6,7 @@
 - 通用 Runbook 与影响图都从 knowledge/topology.yaml 生成，避免两处各写一份、互相漂移。
 """
 
+import time
 from functools import lru_cache
 from typing import Any
 
@@ -139,6 +140,8 @@ def render_general_runbook() -> str:
             "它们成功不能证明数据库或缓存可用；反过来，数据层异常时它们仍可能正常。",
             "- 代理应答异常只说明请求没有被上游正常应答，责任可能在上游应用本身，"
             "需要回到上游容器的状态与日志确认。",
+            "- 代理接口失败而应用自身仍在应答时，不能把启动链上的数据库或缓存一并判成根因，"
+            "也不能把应用进程已退出当作唯一解释。",
             "",
             "## 通用排查步骤",
             "",
@@ -236,3 +239,161 @@ def build_impact_graph(
 
 def read_runbook() -> str:
     return RUNBOOK_PATH.read_text(encoding="utf-8")
+
+
+SERVICE_CAUSE = {
+    "demo-mysql": "MYSQL_SERVICE_STOPPED",
+    "demo-redis": "REDIS_SERVICE_STOPPED",
+    "demo-app": "UPSTREAM_APP_STOPPED",
+}
+
+CONCRETE_CAUSES = frozenset(
+    {
+        "MYSQL_SERVICE_STOPPED",
+        "REDIS_SERVICE_STOPPED",
+        "UPSTREAM_APP_STOPPED",
+        "NGINX_UPSTREAM_MISCONFIGURED",
+    }
+)
+
+
+def _latest_probes(probes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    for probe in probes:
+        name = str(probe.get("name") or "")
+        if name:
+            latest[name] = probe
+    return latest
+
+
+def explain_fault(probes: list[dict[str, Any]], states: dict[str, Any] | None = None) -> dict:
+    """用接口依赖对探针做确定性解释。
+
+    启动顺序不参与。/db-check 失败且 /api/hello 仍成功时，最小解释是数据库，
+    不是整条启动链。解释不唯一时 decisive 为假，调用方不得据此否决诊断。
+    """
+    latest = _latest_probes(probes)
+    states = states or {}
+
+    def verdict(name: str) -> str | None:
+        item = latest.get(name)
+        return None if item is None else item.get("verdict")
+
+    def status_code(name: str):
+        observed = (latest.get(name) or {}).get("observed") or {}
+        return observed.get("status_code")
+
+    def service_state(service_id: str) -> str | None:
+        return (states.get(service_id) or {}).get("state")
+
+    implicated: list[str] = []
+    ruled_out: list[str] = []
+    notes: list[str] = []
+
+    def add(bucket: list[str], service_id: str) -> None:
+        if service_id not in bucket:
+            bucket.append(service_id)
+
+    mysql_fail = verdict("mysql_select_1") == "FAIL" or verdict("app_db_check") == "FAIL"
+    redis_fail = verdict("redis_roundtrip") == "FAIL" or verdict("app_cache_check") == "FAIL"
+    if mysql_fail:
+        add(implicated, "demo-mysql")
+        notes.append("数据库探针失败，指向 demo-mysql")
+    elif verdict("mysql_select_1") == "PASS" or verdict("app_db_check") == "PASS":
+        add(ruled_out, "demo-mysql")
+    if redis_fail:
+        add(implicated, "demo-redis")
+        notes.append("缓存探针失败，指向 demo-redis")
+    elif verdict("redis_roundtrip") == "PASS" or verdict("app_cache_check") == "PASS":
+        add(ruled_out, "demo-redis")
+
+    app_exited = service_state("demo-app") == "exited"
+    app_running = service_state("demo-app") == "running"
+    if verdict("app_health") == "FAIL" or app_exited:
+        add(implicated, "demo-app")
+        notes.append("应用进程不可用")
+
+    hello = verdict("nginx_hello")
+    hello_code = status_code("nginx_hello")
+    upstream_misconfig = False
+    http_500 = False
+    if hello == "FAIL" and hello_code == 502:
+        if app_exited or verdict("app_health") == "FAIL":
+            add(implicated, "demo-app")
+            notes.append("/api/hello 返回 502，且应用进程不可用")
+        elif app_running or verdict("app_health") == "PASS":
+            upstream_misconfig = True
+            add(ruled_out, "demo-app")
+            notes.append("/api/hello 返回 502，但应用仍在运行，不是应用进程退出，也不是整条启动链")
+    elif (
+        hello == "FAIL"
+        and hello_code == 500
+        and (app_running or verdict("app_health") == "PASS" or not app_exited)
+    ):
+        http_500 = True
+        add(ruled_out, "demo-app")
+        notes.append("/api/hello 返回 500，应用仍在运行，没有对应的服务停止根因")
+    elif hello == "PASS":
+        add(ruled_out, "demo-app")
+        notes.append("/api/hello 仍然成功，不把上游应用或整条启动链当成根因")
+    elif verdict("app_health") == "PASS" and "demo-app" not in implicated:
+        add(ruled_out, "demo-app")
+
+    candidates = [service_id for service_id in implicated if service_id not in ruled_out]
+    cause = None
+    abstain = False
+    decisive = False
+    if http_500 and not candidates:
+        abstain = True
+        decisive = True
+    elif upstream_misconfig and not candidates:
+        cause = "NGINX_UPSTREAM_MISCONFIGURED"
+        decisive = True
+    elif len(candidates) == 1 and not http_500 and not upstream_misconfig:
+        cause = SERVICE_CAUSE[candidates[0]]
+        decisive = True
+    reason = "；".join(notes) if notes else "探针不足以唯一确定根因"
+    if decisive and cause == "MYSQL_SERVICE_STOPPED" and hello == "PASS":
+        reason = f"{reason}；最小解释是 demo-mysql，不是整条启动链"
+    cited = sorted(
+        latest,
+        key=lambda name: (0 if latest[name].get("verdict") == "FAIL" else 1, name),
+    )
+    return {
+        "decisive": decisive,
+        "root_cause": cause,
+        "abstain": abstain,
+        "implicated": candidates,
+        "ruled_out": ruled_out,
+        "reason": reason,
+        "cited_checks": cited,
+    }
+
+
+def contradicts(root_cause: str | None, explanation: dict) -> bool:
+    """模型给出了与规则解释不同的具体根因。拒答不算矛盾。"""
+    if not explanation.get("decisive"):
+        return False
+    if root_cause in {None, "", "INSUFFICIENT_EVIDENCE", "OTHER"}:
+        return False
+    if explanation.get("abstain"):
+        return root_cause in CONCRETE_CAUSES
+    expected = explanation.get("root_cause")
+    return bool(expected) and root_cause != expected
+
+
+def explain_from_evidence(evidence: list) -> dict:
+    """从证据列表取最后一次容器快照和全部探针，再做规则解释。"""
+    states: dict[str, Any] = {}
+    probes: list[dict[str, Any]] = []
+    for item in evidence:
+        kind = item.kind if hasattr(item, "kind") else item.get("kind")
+        raw = item.raw if hasattr(item, "raw") else item.get("raw") or {}
+        if kind == "container_state" and isinstance(raw, dict):
+            states = raw
+        elif kind == "probe" and isinstance(raw, dict):
+            probes.append(raw)
+    started = time.monotonic()
+    explanation = explain_fault(probes, states)
+    explanation["rule_ms"] = round((time.monotonic() - started) * 1000)
+    return explanation

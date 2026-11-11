@@ -40,14 +40,27 @@ const totalDuration = computed(() => {
   );
 });
 
-function getStageStep(phase: string): AuditRecord | undefined {
-  return steps.value
-    .filter(
-      (step) =>
-        step.payload.phase === phase &&
-        Number(step.payload.attempt || 1) === currentViewAttempt.value,
-    )
-    .at(-1);
+function stageSteps(phase: string): AuditRecord[] {
+  return steps.value.filter(
+    (step) =>
+      step.payload.phase === phase &&
+      Number(step.payload.attempt || 1) === currentViewAttempt.value,
+  );
+}
+
+function stageElapsed(phase: string): number | undefined {
+  const timed = stageSteps(phase).filter((step) => typeof step.payload.elapsed_ms === 'number');
+  if (!timed.length) return undefined;
+  // 同一阶段可能有多步，例如诊断之后还有执行许可校验。
+  // 阶段耗时是这些步骤的合计，不能只取最后一步。
+  return timed.reduce((sum, step) => sum + Number(step.payload.elapsed_ms), 0);
+}
+
+function representativeStep(phase: string): AuditRecord | undefined {
+  const matching = stageSteps(phase);
+  const failed = matching.find((step) => step.payload.status === 'FAILED');
+  if (failed) return failed;
+  return matching.find((step) => step.payload.step_kind === phase) ?? matching.at(-1);
 }
 
 function flowState(
@@ -55,9 +68,7 @@ function flowState(
 ): 'done' | 'current' | 'waiting' | 'failed' | 'unknown' | 'pending' {
   const attempt = currentViewAttempt.value;
   const isLatestAttempt = attempt === (props.incident.detail.attempt || 1);
-  const match = steps.value
-    .filter((step) => step.payload.phase === phase && Number(step.payload.attempt || 1) === attempt)
-    .at(-1);
+  const match = stageSteps(phase).at(-1);
 
   if (match?.payload.status === 'FAILED') return 'failed';
 
@@ -94,17 +105,15 @@ function subText(phase: string, state: string): string {
   if (state === 'failed') return '失败';
   if (state === 'unknown') return '未知';
   if (state === 'done') {
-    const step = getStageStep(phase);
-    if (step && typeof step.payload.elapsed_ms === 'number') {
-      return durationLabel(step.payload.elapsed_ms);
-    }
+    const elapsed = stageElapsed(phase);
+    if (elapsed !== undefined) return durationLabel(elapsed);
     return '已完成';
   }
   return '';
 }
 
 function handleNodeClick(stage: { phase: string; label: string }) {
-  const step = getStageStep(stage.phase);
+  const step = representativeStep(stage.phase);
   emit('inspect-step', { stageName: stage.label, step });
 }
 

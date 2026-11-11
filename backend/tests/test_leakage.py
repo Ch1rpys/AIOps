@@ -15,17 +15,29 @@ from app.integrations.models import HolmesDiagnosisProvider
 from app.schemas.domain import Diagnosis, DomainReview
 
 # 场景标识：泄漏即等于告诉模型「这次注入的是哪个场景」。
-SCENARIO_MARKERS = ["MYSQL_DOWN", "REDIS_DOWN", "NGINX_502"]
+SCENARIO_MARKERS = ["MYSQL_DOWN", "REDIS_DOWN", "NGINX_502", "NGINX_UPSTREAM", "APP_HTTP_500"]
 # 答案标签：泄漏即等于把答案写进提示词。
-ANSWER_LABELS = ["MYSQL_SERVICE_STOPPED", "REDIS_SERVICE_STOPPED", "UPSTREAM_APP_STOPPED"]
+# 新标签在声明过的 Diagnosis 枚举里，出现在契约之外才算泄漏。
+ANSWER_LABELS = [
+    "MYSQL_SERVICE_STOPPED",
+    "REDIS_SERVICE_STOPPED",
+    "UPSTREAM_APP_STOPPED",
+    "NGINX_UPSTREAM_MISCONFIGURED",
+]
 # 场景专属 Runbook 路径：内容里直接写着注入方式与根因。
 SCENARIO_RUNBOOKS = [
     "knowledge/runbooks/mysql.md",
     "knowledge/runbooks/redis.md",
     "knowledge/runbooks/nginx.md",
+    "knowledge/runbooks/nginx-upstream.md",
 ]
 # 注册动作：泄漏即等于把处置答案写进提示词。
-REGISTERED_ACTIONS = ["START_DEMO_MYSQL", "START_DEMO_REDIS", "START_DEMO_APP"]
+REGISTERED_ACTIONS = [
+    "START_DEMO_MYSQL",
+    "START_DEMO_REDIS",
+    "START_DEMO_APP",
+    "RESTORE_NGINX_UPSTREAM",
+]
 # 提示词里的指向性字段：泄漏即等于告诉模型该看哪几个探针。
 POINTING_FIELDS = ["required_checks", "allowed_action", "expected_checks"]
 

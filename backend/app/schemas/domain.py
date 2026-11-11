@@ -22,13 +22,27 @@ class Scenario(StrEnum):
     MYSQL_DOWN = "MYSQL_DOWN"
     REDIS_DOWN = "REDIS_DOWN"
     NGINX_502 = "NGINX_502"
+    NGINX_UPSTREAM = "NGINX_UPSTREAM"
+    APP_HTTP_500 = "APP_HTTP_500"
 
 
 class Action(StrEnum):
     START_DEMO_MYSQL = "START_DEMO_MYSQL"
     START_DEMO_REDIS = "START_DEMO_REDIS"
     START_DEMO_APP = "START_DEMO_APP"
+    RESTORE_NGINX_UPSTREAM = "RESTORE_NGINX_UPSTREAM"
+    RESTORE_APP_MODE = "RESTORE_APP_MODE"
     NO_ACTION = "NO_ACTION"
+
+
+RootCause = Literal[
+    "MYSQL_SERVICE_STOPPED",
+    "REDIS_SERVICE_STOPPED",
+    "UPSTREAM_APP_STOPPED",
+    "NGINX_UPSTREAM_MISCONFIGURED",
+    "INSUFFICIENT_EVIDENCE",
+    "OTHER",
+]
 
 
 class Status(StrEnum):
@@ -121,13 +135,7 @@ class CandidateRootCause(StrictModel):
     「反对证据」是 M3 的价值所在：新增证据排除了什么，要能核对。
     """
 
-    root_cause: Literal[
-        "MYSQL_SERVICE_STOPPED",
-        "REDIS_SERVICE_STOPPED",
-        "UPSTREAM_APP_STOPPED",
-        "INSUFFICIENT_EVIDENCE",
-        "OTHER",
-    ]
+    root_cause: RootCause
     support_evidence_ids: list[str] = Field(default_factory=list, max_length=10)
     against_evidence_ids: list[str] = Field(default_factory=list, max_length=10)
     missing_checks: list[str] = Field(default_factory=list, max_length=10)
@@ -148,13 +156,7 @@ class CheckRequest(StrictModel):
 
 
 class Diagnosis(StrictModel):
-    root_cause: Literal[
-        "MYSQL_SERVICE_STOPPED",
-        "REDIS_SERVICE_STOPPED",
-        "UPSTREAM_APP_STOPPED",
-        "INSUFFICIENT_EVIDENCE",
-        "OTHER",
-    ]
+    root_cause: RootCause
     summary: str = Field(min_length=1, max_length=4000)
     evidence_ids: list[str] = Field(min_length=1, max_length=30)
     confidence: float = Field(ge=0, le=1)
@@ -168,13 +170,7 @@ class DomainReview(StrictModel):
     """B 臂的独立复核结论：同意或质疑，并给出自己的根因判断。"""
 
     verdict: Literal["agree", "disagree"]
-    root_cause: Literal[
-        "MYSQL_SERVICE_STOPPED",
-        "REDIS_SERVICE_STOPPED",
-        "UPSTREAM_APP_STOPPED",
-        "INSUFFICIENT_EVIDENCE",
-        "OTHER",
-    ]
+    root_cause: RootCause
     reason: str = Field(min_length=1, max_length=2000)
     evidence_ids: list[str] = Field(min_length=1, max_length=30)
     evidence_sufficient: StrictBool
@@ -182,7 +178,7 @@ class DomainReview(StrictModel):
 
 class Plan(StrictModel):
     action_id: Action
-    target: Literal["demo-mysql", "demo-redis", "demo-app", "none"]
+    target: Literal["demo-mysql", "demo-redis", "demo-app", "demo-nginx", "none"]
     reason: str = Field(min_length=1, max_length=2000)
     risk: Literal["LOW"]
     expected_checks: list[
@@ -221,7 +217,9 @@ class EvaluationRequest(StrictModel):
     """触发一次盲诊实验。scenario 是注入指令，由管理员选择，不进模型上下文。"""
 
     scenario: Scenario
-    arms: list[Literal["A", "B", "C"]] = Field(default_factory=lambda: ["A", "B"])
+    arms: list[Literal["A", "B", "C", "L"]] = Field(default_factory=lambda: ["A", "B"])
+    # adversarial：日志和截图里带投毒文本，单独计分，不进普通正确率分母。
+    cohort: Literal["standard", "adversarial"] = "standard"
     # C 臂用的截图 id（先 POST /api/evaluation/attachments 上传得到）。
     attachment_ids: list[str] = Field(default_factory=list, max_length=4)
     confirm: StrictBool

@@ -1,5 +1,7 @@
 # AIOps 故障诊断与处置验证平台
 
+日常操作、五种故障、审批复测、盲诊评测和接口说明见 [使用手册](docs/使用手册.md)。下面保留仓库协作和启动备忘；页面上的当前行为以使用手册为准。
+
 本机竞赛 MVP。支持 MYSQL_DOWN、REDIS_DOWN、NGINX_502：真实停止隔离服务 → 状态、日志和探针采证 → HolmesGPT 诊断 → 独立 LLM 规划 → 人工审批 → 固定动作恢复 → 独立复测 → SQLite 记录与报告。
 
 **三个场景各一条后端真实闭环 PASS。** 已在 Ubuntu 完成真实注入、HolmesGPT + DeepSeek 诊断规划、用户批准、白名单恢复和独立探针 PASS，三条成功工单均为 REAL / RESOLVED。现已补齐三场景前端接线、环境管理和历史报告；3×3 评测尚未开始。本机原始记录与开发过程资料不随源码分发，新环境需重新运行验收。
@@ -40,29 +42,17 @@ git push
 
 首次提交前用 `git status --short` 核对文件清单；可用 `git check-ignore -v <文件路径>` 查询忽略原因。忽略规则仅作用于尚未跟踪的文件，不会移除已提交历史；直接压缩整个工程目录也不会应用这些规则。
 
-## Mac / Apple Silicon 部署
+## 本机双击启动
 
-组员使用 Docker Desktop 时，可在 Mac 本机安装 Python 3.11、uv、Node 22.12+，按 [Mac 部署说明](docs/DEPLOY_MAC.md) 的本机开发步骤运行。该路径不需要 Windows 开发机的虚拟机或 SSH 文件，**macOS 实机安装与三场景闭环仍为 NOT RUN**。
+Windows 双击仓库根目录的 `start.cmd`。macOS 双击 `start-demo.command`。脚本在本机安装锁定的 Python 与前端依赖，启动 Docker 里的 Holmes 和四个 demo，再打开 <http://127.0.0.1:5173>。不连接虚拟机，也不需要另开终端。
 
-现有 `start_mac.sh` 是连接 Ubuntu 的 SSH 入口，`start_all.sh` 与 `check_platform.py` 的运行环境门禁只适用于 Linux。保留的 Mac M5 + Ubuntu 24.04 ARM64 虚拟机方案、架构检查和验收步骤也见上述说明；镜像 ARM64 manifest 核验不代表 Mac 实机验收通过。
+首次运行需要已经安装的 Docker Desktop，以及联网下载工具和镜像。工具装在项目内的 `.tools/`，不提交。已有 demo 容器保持原状态，避免把待审批故障自动恢复。没有 `.env` 时会生成本机管理员口令和实验数据库密码；已经填写的模型地址和密钥不会被覆盖。模型密钥仍为空时页面也会打开，诊断和识图要等密钥写进 `.env`。日志在 `data/backend.log` 与 `data/frontend.log`。8000 或 5173 端口被占用时，脚本会停住并请你先关掉上一次的演示窗口。
 
 ## Ubuntu 部署
 
-日常在 Windows **双击仓库根目录的 `start.cmd`** 即可：连接现有 Ubuntu 虚拟机，启动/复用 Holmes、FastAPI、Vue，建立 5173 / 8000 SSH 转发，检查就绪后打开浏览器。无需分别开多个终端；重复点击复用已有隧道。虚拟机需已开机且网络可达，首次部署仍需安装依赖并填写虚拟机 `.env`。
+下面是在 Ubuntu 本机分终端启动的方式，不是 Windows 或 macOS 的演示入口。演示请用上一节的双击脚本。
 
-Windows 启动入口保留原开发机的连接默认值，组员使用时需传入自己的虚拟机地址、账号和项目路径。默认 SSH 文件位于本机 `data/vm-access/ubuntu_ed25519` 和 `known_hosts`，不随仓库分发。脚本不包含私钥或密码，不自动接受未知主机指纹：
-
-```powershell
-./scripts/start_all.ps1 -VmHost '虚拟机实际地址' -VmUser '实际账号' -RemoteDirectory '/home/实际账号/aiops-platform'
-# 只启动，不打开浏览器：
-./start.cmd -NoBrowser
-```
-
-支持 `-IdentityFile` / `-KnownHostsFile` 指定已有 SSH 文件。Linux 本机也可运行 `bash scripts/start_all.sh`。当前 Windows 入口会同步 frontend 的 src/public/index.html 以及启动/架构检查脚本；后端代码、前端依赖及锁文件的变更仍需单独部署，`.env` 不随源码同步。
-
-Windows 连接前会将私钥复制到 `data/startup/ssh/<当前用户 SID>/identity`，设置所有者为当前用户、关闭权限继承、仅允许当前用户访问并校验 ACL。沙箱与桌面账号使用各自副本，避免 OpenSSH 报 `UNPROTECTED PRIVATE KEY FILE`；源私钥内容和权限不修改，副本属于已忽略的 `data/`，不会提交。
-
-首次没有 demo 容器时创建四个 demo；已有 demo 一律保留当前状态，避免把待审批故障自动恢复。重启虚拟机后若实验基线不健康，请在实验页检查并确认重置。Holmes 健康检查和 Planner 配置检查不代表真实模型诊断通过。启动失败返回非零；远程日志为 `data/backend.log`、`data/frontend.log`，本机隧道日志为 `data/startup/ssh-error.log`。若本机 5173 / 8000 已由其他程序或旧手工隧道占用，脚本提示冲突，由用户关闭旧会话后重试。
+首次没有 demo 容器时创建四个 demo；已有 demo 一律保留当前状态，避免把待审批故障自动恢复。Holmes 健康检查和 Planner 配置检查不代表真实模型诊断通过。启动失败返回非零；日志为 `data/backend.log`、`data/frontend.log`。若本机 5173 / 8000 已被占用，先关掉旧进程再启动。
 
 在自己的 Ubuntu 项目目录使用 Python 3.11、uv、Node 22.12+，首次通过 `uv sync --frozen` 与 `frontend` 中的 `npm ci` 安装锁定依赖。Linux 启动脚本：
 
@@ -74,9 +64,7 @@ bash scripts/start_backend.sh
 bash scripts/start_frontend.sh
 ```
 
-Linux 实验启动脚本默认启动四个 demo；Holmes 使用同一 Compose 文件的 `holmes` 服务单独启动。服务均保持 loopback 绑定，Windows 通过 SSH 转发 5173 端口访问 Vue，Vue 代理同机 FastAPI。私钥、管理员令牌和数据库密码不随代码同步。
-
-SSH 同时转发 Windows 5173 → VM Vue、8000 → VM FastAPI。虚拟机服务在后台运行，重启虚拟机后需重新启动；SSH 会话关闭后需重建转发。恢复期间的每次探针采样均保存在实际工单中。
+Linux 实验启动脚本默认启动四个 demo；Holmes 使用同一 Compose 文件的 `holmes` 服务单独启动。服务均保持 loopback 绑定，Vue 代理同机 FastAPI。私钥、管理员令牌和数据库密码不随代码同步。恢复期间的每次探针采样均保存在实际工单中。
 
 DeepSeek 配置采用 `HOLMES_MODEL=deepseek/deepseek-flash`、`PLANNER_MODEL=deepseek-flash`、`PLANNER_URL=https://api.deepseek.com/v1`；`DEEPSEEK_API` 和 `PLANNER_API_KEY` 通过受限 .env 注入，两个 JSON_MODE 均设为 `json_object`。此模式遵循 [DeepSeek 官方 JSON Output](https://api-docs.deepseek.com/guides/json_mode/)，提示中携带 Schema，结果仍用原 Pydantic 契约验证，不放宽动作白名单。默认其他提供商仍使用 `json_schema`。
 

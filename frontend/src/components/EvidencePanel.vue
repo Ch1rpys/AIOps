@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { evidenceKindLabels, objectValue, shortTimeLabel } from '../display';
 import type { AuditRecord, Json } from '../types';
 
@@ -49,6 +49,17 @@ const displayRows = computed(() => {
   if (expandedAll.value) return sortedEvidence.value;
   return sortedEvidence.value.slice(0, 5);
 });
+
+// 定位诊断依据时，先取消筛选并展开，否则目标行可能根本不在页面上。
+watch(
+  () => props.highlightId,
+  (id) => {
+    if (!id) return;
+    categoryFilter.value = 'all';
+    onlyCited.value = true;
+    expandedAll.value = true;
+  },
+);
 
 function probeVerdict(rawJson: Json | undefined): string {
   const verdict = objectValue(rawJson).verdict;

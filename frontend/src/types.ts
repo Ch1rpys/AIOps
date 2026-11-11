@@ -1,5 +1,6 @@
 export type Verdict = 'PASS' | 'FAIL' | 'UNKNOWN';
-export type ScenarioKey = 'MYSQL_DOWN' | 'REDIS_DOWN' | 'NGINX_502';
+export type ScenarioKey =
+  'MYSQL_DOWN' | 'REDIS_DOWN' | 'NGINX_502' | 'NGINX_UPSTREAM' | 'APP_HTTP_500';
 export type Status =
   | 'CREATED'
   | 'INJECTED'
@@ -115,6 +116,10 @@ export interface Incident extends IncidentSummary {
     plan_id?: string;
     plan?: Plan;
     diagnosis?: Diagnosis;
+    diagnosis_source?: string;
+    plan_source?: string;
+    repair_note?: string | null;
+    model_error?: { code: string; message: string };
     error?: { code: string; message: string };
     verification?: {
       verdict: Verdict;
@@ -197,6 +202,21 @@ export interface ImpactGraph {
   root_cause: string | null;
   legend: Record<string, string>;
   source: string;
+  /** 规则解释：由探针和拓扑算出，不消耗 token。 */
+  rule_explanation?: {
+    decisive: boolean;
+    root_cause: string | null;
+    abstain: boolean;
+    implicated: string[];
+    ruled_out: string[];
+    reason: string;
+    rule_ms?: number | null;
+  } | null;
+  /** 模型推断：与规则解释分开，不把启动顺序画成因果。 */
+  model_inference?: {
+    root_cause: string | null;
+    service: string | null;
+  } | null;
 }
 export interface IncidentReview {
   incident_id: string;
@@ -224,7 +244,8 @@ export interface IncidentReview {
 
 // ---- 盲诊评测 ---------------------------------------------------------------
 
-export type EvaluationArm = 'A' | 'B' | 'C';
+export type EvaluationArm = 'A' | 'B' | 'C' | 'L';
+export type EvaluationCohort = 'standard' | 'adversarial';
 
 export interface EvaluationRunRow {
   id: string;
@@ -239,6 +260,10 @@ export interface EvaluationRunRow {
   token_usage: Record<string, Json> | null;
   fault_present: number | null;
   created_at: string;
+  cohort?: 'standard' | 'adversarial' | 'abstain';
+  root_cause_biased?: number | null;
+  illegal_action_proposed?: number | null;
+  illegal_action_executed?: number | null;
   /** 只有显式切到「评测视图」才会返回。 */
   truth_scenario?: ScenarioKey;
   correct?: number | null;
@@ -298,11 +323,28 @@ export interface EndToEndSummary {
   note: string;
 }
 
+export interface AdversarialSummary {
+  excluded_from_accuracy: boolean;
+  runs: number;
+  root_cause_biased: number | null;
+  root_cause_biased_rate: number | null;
+  illegal_action_proposed: number | null;
+  illegal_action_executed: number | null;
+  note: string;
+}
+export interface AbstainSummary {
+  excluded_from_accuracy: boolean;
+  runs: number;
+  abstained: number | null;
+  note: string;
+}
 export interface EvaluationSummary {
   arms: EvaluationArmSummary[];
   /** 纯诊断对照不评估处置提议与拦截率：显示「不适用」，不记 0。 */
   proposal_metrics_applicable: boolean;
   /** 端到端（闭环）路径的处置提议与拦截指标。 */
   end_to_end: EndToEndSummary;
+  adversarial: AdversarialSummary;
+  abstain: AbstainSummary;
   notes: string[];
 }

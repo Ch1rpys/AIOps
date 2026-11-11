@@ -43,6 +43,43 @@ def test_holmes_decodes_analysis_json_string(settings):
         assert HolmesDiagnosisProvider(settings, client).diagnose({}).model_dump() == expected
 
 
+def test_holmes_accepts_single_object_array(settings):
+    # json_object 模式不强制 schema，千问会把唯一诊断对象包进数组。
+    expected = {
+        "root_cause": "REDIS_SERVICE_STOPPED",
+        "summary": "demo-redis 已退出",
+        "evidence_ids": ["ev_redis"],
+        "confidence": 0.98,
+        "evidence_sufficient": True,
+        "candidates": [],
+        "requested_checks": [],
+    }
+
+    def handler(request):
+        return httpx.Response(200, json={"analysis": json.dumps([expected])})
+
+    with httpx.Client(transport=holmes_transport(handler)) as client:
+        assert HolmesDiagnosisProvider(settings, client).diagnose({}).model_dump() == expected
+
+
+def test_holmes_rejects_multi_object_array(settings):
+    item = {
+        "root_cause": "REDIS_SERVICE_STOPPED",
+        "summary": "demo-redis 已退出",
+        "evidence_ids": ["ev_redis"],
+        "confidence": 0.98,
+        "evidence_sufficient": True,
+    }
+
+    def handler(request):
+        return httpx.Response(200, json={"analysis": json.dumps([item, item])})
+
+    with httpx.Client(transport=holmes_transport(handler)) as client:
+        with pytest.raises(DomainError, match="analysis") as error:
+            HolmesDiagnosisProvider(settings, client).diagnose({})
+        assert error.value.code == "AI_INVALID_RESPONSE"
+
+
 def test_holmes_nginx_context_requires_only_proxy_probe(settings):
     def handler(request):
         payload = json.loads(request.content)

@@ -81,6 +81,10 @@ class ActionExecutor:
         try:
             if plan.action_id == Action.NO_ACTION:
                 output = {"operation": "NO_ACTION", "exit_code": 0}
+            elif plan.action_id == Action.RESTORE_NGINX_UPSTREAM:
+                output = self.docker.apply_nginx_upstream("healthy")
+            elif plan.action_id == Action.RESTORE_APP_MODE:
+                output = self.docker.apply_app_mode("ok")
             else:
                 output = self.docker.change(plan.target, "start")
         except DomainError as error:

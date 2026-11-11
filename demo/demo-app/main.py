@@ -1,5 +1,6 @@
 import logging
 import os
+from pathlib import Path
 
 import pymysql
 import redis
@@ -9,6 +10,17 @@ from fastapi.responses import JSONResponse
 app = FastAPI(title="隔离故障实验应用")
 logger = logging.getLogger("demo-app")
 TIMEOUT = 2
+MODE_FILE = os.environ.get("APP_MODE_FILE", "")
+
+
+def fixed_http_500() -> bool:
+    """只认控制文件里的固定标记。读不到文件就按正常应答。"""
+    if not MODE_FILE:
+        return False
+    try:
+        return Path(MODE_FILE).read_text(encoding="utf-8").strip() == "http_500"
+    except OSError:
+        return False
 
 
 @app.get("/health")
@@ -18,6 +30,8 @@ def health():
 
 @app.get("/api/hello")
 def hello():
+    if fixed_http_500():
+        return JSONResponse(status_code=500, content={"status": "error", "code": "FIXED_500"})
     return {"message": "hello from demo-app"}
 
 

@@ -121,19 +121,19 @@ def test_supplement_runs_when_the_model_says_evidence_is_insufficient(client, wo
     assert item["detail"]["supplement"]["requested"] == [
         {"check_id": "app_health", "reason": "需要确认应用健康"}
     ]
-    # 补采后模型仍然自认证据不足 → 执行许可门禁照样拦下，不放行到审批页。
-    assert item["status"] == "UNKNOWN"
-    assert item["detail"]["error"]["code"] == "EVIDENCE_INSUFFICIENT"
-    assert "plan_id" not in item["detail"]
+    # 补采后模型仍然自认证据不足，但探针已证实故障，改为注册恢复动作等待批准。
+    assert item["status"] == "WAITING_APPROVAL"
+    assert item["detail"]["plan"]["action_id"] == "START_DEMO_MYSQL"
+    assert [record for record in item["records"] if record["kind"] == "execution"] == []
 
 
-def test_supplement_then_sufficient_diagnosis_reaches_approval(client, world):
-    """补采后模型改判证据充分 → 正常进入审批，门禁没有放松。"""
+def test_supplement_then_still_insufficient_reaches_registered_repair(client, world):
+    """补采后模型仍说证据不足，已证实的故障继续走到注册恢复。"""
     world.requested_checks = [[{"check_id": "app_health", "reason": "需要确认应用健康"}]]
     world.evidence_sufficient = False
     incident_id = injected(client)
     client.post(f"/api/incidents/{incident_id}/diagnose")
     item = detail(client, incident_id)
-    assert item["status"] == "UNKNOWN"
-    assert item["detail"]["error"]["code"] == "EVIDENCE_INSUFFICIENT"
+    assert item["status"] == "WAITING_APPROVAL"
+    assert item["detail"]["plan"]["action_id"] == "START_DEMO_MYSQL"
     assert item["detail"]["supplement"]["round"] == 1

@@ -119,14 +119,14 @@ def test_blind_path_keeps_wrong_answers_instead_of_blocking_them():
     )
 
 
-def test_closed_loop_blocks_self_reported_insufficient_evidence(client, world):
-    """闭环入口必须拦下 evidence_sufficient=false 的诊断，不放行到审批页。"""
+def test_insufficient_model_still_offers_registered_repair(client, world):
+    """模型自认证据不足时，探针已证实的故障仍进入注册恢复，不在门禁处停住。"""
     world.evidence_sufficient = False
     incident_id = injected(client)
     client.post(f"/api/incidents/{incident_id}/diagnose")
     item = client.get(f"/api/incidents/{incident_id}").json()
-    assert item["status"] == "UNKNOWN"
-    assert item["detail"]["error"]["code"] == "EVIDENCE_INSUFFICIENT"
+    assert item["status"] == "WAITING_APPROVAL"
+    assert item["detail"]["plan"]["action_id"] == "START_DEMO_MYSQL"
     assert world.operations == [("demo-mysql", "stop")]
 
 

@@ -56,14 +56,17 @@ function formatProbeObserved(probe: Probe): string {
   <section class="proto-card">
     <div class="section-heading">
       <h2>工单复测</h2>
-      <button
-        v-if="verification || latestSampleProbes.length"
-        type="button"
-        class="text-button text-12"
-        @click="emit('inspect-verification')"
-      >
-        采样详情 →
-      </button>
+      <div class="heading-actions">
+        <button
+          v-if="verification || latestSampleProbes.length"
+          type="button"
+          class="text-button text-12"
+          @click="emit('inspect-verification')"
+        >
+          采样详情 →
+        </button>
+        <slot name="actions" />
+      </div>
     </div>
 
     <!-- 结论大横幅 (V1-10) -->

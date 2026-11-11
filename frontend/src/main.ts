@@ -6,6 +6,7 @@ import IncidentDetail from './views/IncidentDetail.vue';
 import Environment from './views/Environment.vue';
 import Evaluation from './views/Evaluation.vue';
 import Incidents from './views/Incidents.vue';
+import RecoveryCardPage from './views/RecoveryCardPage.vue';
 import 'element-plus/dist/index.css';
 import './style.css';
 
@@ -16,6 +17,7 @@ const router = createRouter({
     { path: '/lab', component: Lab },
     { path: '/environment', component: Environment },
     { path: '/incidents', component: Incidents },
+    { path: '/incidents/:id/card', component: RecoveryCardPage },
     { path: '/incidents/:id', component: IncidentDetail },
     { path: '/evaluation', component: Evaluation },
     { path: '/:pathMatch(.*)*', redirect: '/lab' },

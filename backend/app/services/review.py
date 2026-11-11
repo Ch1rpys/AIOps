@@ -14,6 +14,7 @@ ROOT_CAUSE_SERVICE = {
     "MYSQL_SERVICE_STOPPED": "demo-mysql",
     "REDIS_SERVICE_STOPPED": "demo-redis",
     "UPSTREAM_APP_STOPPED": "demo-app",
+    "NGINX_UPSTREAM_MISCONFIGURED": "demo-nginx",
 }
 
 
@@ -101,6 +102,18 @@ def incident_impact_graph(item: dict) -> dict:
         edge["inferred"] = bool(
             edge["kind"] == "inferred" and root_cause_service and edge["to"] == root_cause_service
         )
+    detail = item.get("detail") or {}
+    explanation = detail.get("topology_explanation")
+    if isinstance(explanation, dict):
+        explanation = {**explanation, "rule_ms": detail.get("rule_ms")}
+    graph["rule_explanation"] = explanation
+    if detail.get("diagnosis_source") == "registered_repair":
+        graph["model_inference"] = {"root_cause": None, "service": None}
+    else:
+        graph["model_inference"] = {
+            "root_cause": diagnosis.get("root_cause"),
+            "service": root_cause_service,
+        }
     graph["generated_at"] = now()
     graph["source"] = "incident_records"
     return graph

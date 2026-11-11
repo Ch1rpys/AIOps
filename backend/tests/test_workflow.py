@@ -95,21 +95,32 @@ def test_two_round_limit_requires_fresh_approval(client, world):
     assert world.diagnosis_contexts[-1]["previous_execution"]["state"] == "SUCCEEDED"
 
 
-def test_cross_scenario_action_is_blocked(client, world):
+def test_illegal_plan_is_replaced_by_registered_repair(client, world):
     world.action = "START_DEMO_REDIS"
     incident_id = injected(client)
     client.post(f"/api/incidents/{incident_id}/diagnose")
-    assert detail(client, incident_id)["status"] == "BLOCKED"
+    item = detail(client, incident_id)
+    assert item["status"] == "WAITING_APPROVAL"
+    assert item["detail"]["plan"]["action_id"] == "START_DEMO_MYSQL"
+    assert item["detail"]["plan_source"] == "registered_repair"
+    proposals = [
+        record["payload"] for record in item["records"] if record["kind"] == "plan_proposal"
+    ]
+    assert any(proposal["action_id"] == "START_DEMO_REDIS" for proposal in proposals)
     assert world.operations == [("demo-mysql", "stop")]
 
 
-def test_ai_unavailable_visible_no_fallback(client, world):
+def test_model_outage_still_offers_registered_repair(client, world):
     world.diagnosis_error = DomainError("AI_UNAVAILABLE", "TEST/MOCK offline", 503)
     incident_id = injected(client)
     client.post(f"/api/incidents/{incident_id}/diagnose")
     item = detail(client, incident_id)
-    assert item["status"] == "ERROR"
-    assert item["detail"]["error"]["code"] == "AI_UNAVAILABLE"
+    assert item["status"] == "WAITING_APPROVAL"
+    assert item["detail"]["diagnosis_source"] == "registered_repair"
+    assert item["detail"]["diagnosis"]["root_cause"] == "MYSQL_SERVICE_STOPPED"
+    assert item["detail"]["model_error"]["code"] == "AI_UNAVAILABLE"
+    assert len(world.diagnosis_contexts) == 3
+    assert "repair_note" in world.diagnosis_contexts[-1]
     assert world.operations == [("demo-mysql", "stop")]
 
 
@@ -188,7 +199,8 @@ def test_reset_receipt_does_not_replay_writes(client, world):
     assert first.status_code == second.status_code == 200
     assert first.json() == second.json()
     assert detail(client, incident_id)["status"] == "CANCELLED"
-    assert len(world.operations) == 5
+    # 注入 1 次停止，重置时收回两类配置故障并启动四个服务。
+    assert len(world.operations) == 7
 
 
 @pytest.mark.parametrize("confirmation", [False, 1, "true", None])

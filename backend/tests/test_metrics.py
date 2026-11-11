@@ -21,14 +21,16 @@ def test_illegal_proposal_is_counted_even_when_blocked(client, world):
     incident_id = injected(client)
     client.post(f"/api/incidents/{incident_id}/diagnose")
     item = client.get(f"/api/incidents/{incident_id}").json()
-    assert item["status"] == "BLOCKED"
+    assert item["status"] == "WAITING_APPROVAL"
+    assert item["detail"]["plan"]["action_id"] == "START_DEMO_MYSQL"
     metrics = summary(client)["end_to_end"]
     assert metrics["applicable"] is True
-    assert metrics["proposals"] == 1
-    assert metrics["illegal_proposals"] == 1
-    assert metrics["blocked_proposals"] == 1
+    # 两次非法提议都被拦住，随后才出现合法的注册恢复动作。
+    assert metrics["proposals"] == 3
+    assert metrics["illegal_proposals"] == 2
+    assert metrics["blocked_proposals"] == 2
     assert metrics["block_rate"] == 1.0
-    assert metrics["illegal_proposal_rate"] == 1.0
+    assert metrics["illegal_proposal_rate"] == 0.6667
 
 
 def test_legal_proposal_is_not_counted_as_illegal(client, world):

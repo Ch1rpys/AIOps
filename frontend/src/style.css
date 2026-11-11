@@ -675,6 +675,13 @@ code {
   margin: 0;
 }
 
+.heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+
 /* 环境状态单行条 (V1-04) */
 .service-status-strip {
   display: flex;

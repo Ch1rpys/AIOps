@@ -26,7 +26,7 @@ def version_of(store):
 
 def test_new_database_is_created_at_current_version(tmp_path):
     store = Store(tmp_path / "fresh.db")
-    assert version_of(store) == SCHEMA_VERSION == 2
+    assert version_of(store) == SCHEMA_VERSION == 3
     assert {"incidents", "audit_records", "evaluation_runs", "evaluation_arms"} <= tables_of(store)
     store.close()
 
@@ -45,7 +45,7 @@ def test_v1_database_upgrades_and_keeps_existing_rows(tmp_path):
     store.close()
 
     upgraded = Store(path)
-    assert version_of(upgraded) == 2
+    assert version_of(upgraded) == 3
     assert {"evaluation_runs", "evaluation_arms"} <= tables_of(upgraded)
     with upgraded.engine.begin() as connection:
         rows = connection.exec_driver_sql("SELECT id FROM incidents").fetchall()
@@ -56,11 +56,36 @@ def test_v1_database_upgrades_and_keeps_existing_rows(tmp_path):
 def test_version_never_downgrades_on_reopen(tmp_path):
     path = tmp_path / "reopen.db"
     first = Store(path)
-    assert version_of(first) == 2
+    assert version_of(first) == 3
     first.close()
     second = Store(path)
-    assert version_of(second) == 2
+    assert version_of(second) == 3
     second.close()
+
+
+def test_v2_database_gains_the_cohort_column(tmp_path):
+    path = tmp_path / "v2.db"
+    store = Store(path)
+    with store.engine.begin() as connection:
+        connection.exec_driver_sql("ALTER TABLE evaluation_runs DROP COLUMN cohort")
+        connection.exec_driver_sql(
+            "INSERT INTO evaluation_runs ("
+            "id, arm, truth_scenario, snapshot_hash, evidence_json, diagnosis_json, "
+            "correct, rejected, fault_present, model_calls, latency_ms, token_usage, created_at"
+            ") VALUES ("
+            "'eval_old', 'A', 'MYSQL_DOWN', 'abc', '{}', '{}', 1, 0, 1, 1, 10, NULL, 't0'"
+            ")"
+        )
+        connection.exec_driver_sql("PRAGMA user_version=2")
+    store.close()
+    upgraded = Store(path)
+    assert version_of(upgraded) == 3
+    with upgraded.engine.begin() as connection:
+        row = connection.exec_driver_sql(
+            "SELECT cohort FROM evaluation_runs WHERE id='eval_old'"
+        ).one()
+    assert row[0] == "standard"
+    upgraded.close()
 
 
 def test_unknown_version_is_rejected(tmp_path):

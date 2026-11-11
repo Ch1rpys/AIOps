@@ -62,11 +62,12 @@ def create_app(settings: Settings | None = None, factory=None) -> FastAPI:
                 probes = Probes(settings, client)
                 evidence = EvidenceAgent(settings, docker, probes)
                 provider = HolmesDiagnosisProvider(settings, client)
+                planner = LLMPlanner(settings, client)
                 workflow = Workflow(
                     store,
                     evidence,
                     provider,
-                    LLMPlanner(settings, client),
+                    planner,
                     ActionExecutor(store, docker),
                     probes,
                     saver,
@@ -94,6 +95,7 @@ def create_app(settings: Settings | None = None, factory=None) -> FastAPI:
                     attachments=AttachmentService(
                         settings, DashScopeVisionProvider(settings, client)
                     ),
+                    planner=planner,
                 )
             app.state.platform = service
             app.state.evaluation = evaluation_service

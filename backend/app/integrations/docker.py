@@ -4,6 +4,14 @@ import subprocess
 
 from app.config import COMPOSE_PROJECT, ROOT, SERVICES, DomainError, Settings
 
+NGINX_PROFILES = {
+    "healthy": ROOT / "demo/nginx/default.conf",
+    "misdirected": ROOT / "demo/nginx/misdirected.conf",
+}
+NGINX_ACTIVE = ROOT / "demo/nginx/active/default.conf"
+APP_MODE_FILE = ROOT / "demo/app-control/mode"
+APP_MODES = {"ok", "http_500"}
+
 
 class DockerController:
     def __init__(self, settings: Settings):
@@ -86,6 +94,33 @@ class DockerController:
             "exit_code": 0,
             "command_template": f"docker compose -p {COMPOSE_PROJECT} {operation} {service}",
         }
+
+    def apply_nginx_upstream(self, profile: str) -> dict:
+        """换成仓库里的固定代理配置，再让正在运行的 Nginx 重载。
+
+        profile 只能是 healthy / misdirected。重载参数是固定的 argv，不是拼接出来的命令。
+        """
+        template = NGINX_PROFILES.get(profile)
+        if template is None:
+            raise DomainError("BLOCKED", "拒绝未注册的代理配置")
+        NGINX_ACTIVE.parent.mkdir(parents=True, exist_ok=True)
+        NGINX_ACTIVE.write_bytes(template.read_bytes())
+        snapshot = {}
+        try:
+            snapshot = self.snapshot()
+        except DomainError:
+            snapshot = {}
+        if snapshot.get("demo-nginx", {}).get("state") == "running":
+            self._run([*self.base, "exec", "-T", "demo-nginx", "nginx", "-s", "reload"])
+        return {"profile": profile, "exit_code": 0, "operation": "nginx_upstream"}
+
+    def apply_app_mode(self, mode: str) -> dict:
+        """把应用模式写成 ok 或 http_500。应用每次请求自己读这个文件。"""
+        if mode not in APP_MODES:
+            raise DomainError("BLOCKED", "拒绝未注册的应用模式")
+        APP_MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        APP_MODE_FILE.write_text(mode + "\n", encoding="utf-8")
+        return {"mode": mode, "exit_code": 0, "operation": "app_mode"}
 
     def logs(self, service: str) -> str:
         if service not in SERVICES:

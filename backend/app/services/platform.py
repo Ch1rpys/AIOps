@@ -7,10 +7,10 @@ from langgraph.types import Command
 from sqlalchemy import select
 
 from app.agents.evidence import fault_observed
-from app.config import SERVICES, DomainError
+from app.config import DomainError
 from app.repositories.store import Incident, LabLease, RequestReceipt
-from app.scenarios import SCENARIOS
 from app.schemas.domain import TERMINAL, Scenario, Status, new_id, now
+from app.services.faults import apply_fault, clear_lab
 from app.services.lab import lab_baseline
 
 logger = logging.getLogger("aiops.platform")
@@ -179,7 +179,7 @@ class Platform:
                 session.add(LabLease(id=1, incident_id=incident_id))
                 self.store.save_receipt(session, key, scope, fingerprint, {"pending": True})
             try:
-                output = self.docker.change(SCENARIOS[scenario].target, "stop")
+                output = apply_fault(self.docker, scenario)
                 evidence = []
                 confirmed = False
                 # Docker 退出后代理可能短暂返回 504；有界补采，不把它误认成目标 502。
@@ -352,7 +352,7 @@ class Platform:
                     session, incident_id, "reset", {"state": "STARTED", "operator": "local-admin"}
                 )
             try:
-                outputs = [self.docker.change(service, "start") for service in SERVICES]
+                outputs = clear_lab(self.docker)
                 for index in range(self.settings.verification_attempts):
                     if index:
                         time.sleep(self.settings.verification_interval)

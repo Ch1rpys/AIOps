@@ -6,7 +6,16 @@ from app.config import DomainError
 from app.integrations.probes import Probes, judge
 from app.main import create_app
 from app.scenarios import SCENARIOS
-from app.schemas.domain import Diagnosis, Evidence, Plan, Probe, Scenario, Verdict, Verification
+from app.schemas.domain import (
+    Action,
+    Diagnosis,
+    Evidence,
+    Plan,
+    Probe,
+    Scenario,
+    Verdict,
+    Verification,
+)
 from app.services.executor import validate_plan
 from conftest import TestWorld, approve
 from fastapi.testclient import TestClient
@@ -33,12 +42,20 @@ class ScenarioWorld(TestWorld):
 
     def for_scenario(self, scenario):
         definition = SCENARIOS[scenario]
-        failed = definition.target in self.stopped_services
+        if definition.inject == "nginx_upstream":
+            failed = self.nginx_profile == "misdirected"
+            code = 502 if failed else 200
+        elif definition.inject == "app_http_500":
+            failed = self.app_mode == "http_500"
+            code = 500 if failed else 200
+        else:
+            failed = definition.target in self.stopped_services
+            code = 502 if failed else 200
         return [
             Probe(
                 name=name,
                 verdict=Verdict.FAIL if failed else Verdict.PASS,
-                observed={"mode": "TEST/MOCK", "status_code": 502 if failed else 200},
+                observed={"mode": "TEST/MOCK", "status_code": code},
             )
             for name in definition.checks
         ]
@@ -91,7 +108,7 @@ class ScenarioWorld(TestWorld):
         return Verification(verdict=judge(sample, scenario), samples=[sample])
 
 
-@pytest.mark.parametrize("scenario", list(Scenario))
+@pytest.mark.parametrize("scenario", [item for item in Scenario if SCENARIOS[item].recoverable])
 @pytest.mark.parametrize("decision", ["approve", "reject"])
 def test_scenario_graph_end_to_end(settings, scenario, decision):
     world = ScenarioWorld()
@@ -115,9 +132,15 @@ def test_scenario_graph_end_to_end(settings, scenario, decision):
         approve(client, incident_id, plan_id, decision)
         item = client.get(f"/api/incidents/{incident_id}").json()
         assert item["status"] == ("RESOLVED" if decision == "approve" else "CANCELLED")
-        assert world.operations == [(definition.target, "stop")] + (
-            [(definition.target, "start")] if decision == "approve" else []
-        )
+        if definition.inject == "stop":
+            expected = [(definition.target, "stop")]
+            if decision == "approve":
+                expected.append((definition.target, "start"))
+        else:
+            expected = [("nginx-upstream", "misdirected")]
+            if decision == "approve":
+                expected.append(("nginx-upstream", "healthy"))
+        assert world.operations == expected
         if decision == "approve":
             assert {p["name"] for p in item["detail"]["verification"]["samples"][-1]} == set(
                 definition.checks
@@ -128,13 +151,16 @@ def test_scenario_graph_end_to_end(settings, scenario, decision):
         )
 
 
-@pytest.mark.parametrize("scenario", list(Scenario))
-@pytest.mark.parametrize("action_scenario", list(Scenario))
+@pytest.mark.parametrize("scenario", [item for item in Scenario if SCENARIOS[item].recoverable])
+@pytest.mark.parametrize(
+    "action_scenario", [item for item in Scenario if SCENARIOS[item].recoverable]
+)
 def test_action_cannot_cross_scenarios(scenario, action_scenario):
     action = SCENARIOS[action_scenario]
+    target = "none" if action.action == Action.NO_ACTION else action.target
     plan = Plan(
         action_id=action.action,
-        target=action.target,
+        target=target,
         reason="TEST/MOCK",
         risk="LOW",
         expected_checks=list(action.checks),
@@ -144,6 +170,60 @@ def test_action_cannot_cross_scenarios(scenario, action_scenario):
     else:
         with pytest.raises(DomainError):
             validate_plan(plan, scenario)
+
+
+def test_negative_scenario_rejects_every_recovery_plan():
+    for scenario in Scenario:
+        if not SCENARIOS[scenario].recoverable:
+            continue
+        definition = SCENARIOS[scenario]
+        plan = Plan(
+            action_id=definition.action,
+            target=definition.target,
+            reason="TEST/MOCK",
+            risk="LOW",
+            expected_checks=list(definition.checks),
+        )
+        with pytest.raises(DomainError):
+            validate_plan(plan, Scenario.APP_HTTP_500)
+
+
+def test_http_500_reaches_registered_restore(client, world):
+    world.closed_root_cause = "OTHER"
+    created = client.post(
+        "/api/scenarios/APP_HTTP_500/inject",
+        json={"confirm": True},
+        headers={"Idempotency-Key": "TEST-http500"},
+    )
+    assert created.status_code == 201, created.text
+    incident_id = created.json()["incident_id"]
+    client.post(f"/api/incidents/{incident_id}/diagnose")
+    item = client.get(f"/api/incidents/{incident_id}").json()
+    assert item["status"] == "WAITING_APPROVAL"
+    assert item["detail"]["plan"]["action_id"] == "RESTORE_APP_MODE"
+    approve(client, incident_id, item["detail"]["plan_id"])
+    item = client.get(f"/api/incidents/{incident_id}").json()
+    assert item["status"] == "RESOLVED"
+    assert ("app-mode", "http_500") in world.operations
+    assert ("app-mode", "ok") in world.operations
+    assert ("demo-app", "start") not in world.operations
+
+
+def test_http_500_wrong_concrete_cause_still_restores_after_approval(client, world):
+    world.closed_root_cause = "UPSTREAM_APP_STOPPED"
+    created = client.post(
+        "/api/scenarios/APP_HTTP_500/inject",
+        json={"confirm": True},
+        headers={"Idempotency-Key": "TEST-http500-wrong"},
+    )
+    assert created.status_code == 201, created.text
+    incident_id = created.json()["incident_id"]
+    client.post(f"/api/incidents/{incident_id}/diagnose")
+    item = client.get(f"/api/incidents/{incident_id}").json()
+    assert item["status"] == "WAITING_APPROVAL"
+    assert item["detail"]["plan"]["action_id"] == "RESTORE_APP_MODE"
+    assert [record for record in item["records"] if record["kind"] == "execution"] == []
+    assert ("demo-app", "start") not in world.operations
 
 
 @pytest.mark.parametrize("status,confirmed", [(502, True), (500, False), (404, False)])
@@ -353,6 +433,7 @@ def test_semantically_rejected_diagnosis_remains_auditable(settings):
         ).json()
         client.post(f"/api/incidents/{created['incident_id']}/diagnose")
         item = client.get(f"/api/incidents/{created['incident_id']}").json()
-        assert item["status"] == "UNKNOWN"
+        assert item["status"] == "WAITING_APPROVAL"
         assert item["detail"]["diagnosis"]["summary"] == "TEST/MOCK evidence insufficient"
+        assert item["detail"]["plan"]["action_id"] == "START_DEMO_APP"
         assert world.operations == [("demo-app", "stop")]

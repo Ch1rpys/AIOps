@@ -58,6 +58,7 @@ GEMINI.md
 
 # 各平台需按锁文件重新安装依赖，不提交本机环境和构建缓存。
 .cache/
+.tools/
 .venv/
 venv/
 __pycache__/

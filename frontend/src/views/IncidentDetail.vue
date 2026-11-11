@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import {
   ElAlert,
   ElButton,
+  ElDialog,
   ElInput,
   ElMessage,
   ElPopconfirm,
@@ -35,6 +36,7 @@ import EvidencePanel from '../components/EvidencePanel.vue';
 import WorkflowTrace from '../components/WorkflowTrace.vue';
 import VerificationPanel from '../components/VerificationPanel.vue';
 import DetailDrawer from '../components/DetailDrawer.vue';
+import RecoveryCard from '../components/RecoveryCard.vue';
 import type {
   Attachment,
   AuditRecord,
@@ -43,6 +45,7 @@ import type {
   IncidentReview,
   Json,
   Probe,
+  Status,
 } from '../types';
 
 const route = useRoute();
@@ -50,6 +53,8 @@ const id = computed(() => String(route.params.id));
 const incident = ref<Incident | null>(null);
 const impact = ref<ImpactGraph | null>(null);
 const review = ref<IncidentReview | null>(null);
+const recoveryCardOpen = ref(false);
+const statusBeforeLoad = ref<Status | null>(null);
 const attachments = ref<Attachment[]>([]);
 const uploading = ref(false);
 const attachmentError = ref('');
@@ -153,12 +158,24 @@ async function load() {
   try {
     const result = await api.incident(requestedId);
     if (requestedId !== id.value || requestedVersion !== version || disposed) return;
+    const priorStatus = statusBeforeLoad.value;
     incident.value = result;
+    statusBeforeLoad.value = result.status;
     updateRecent(result);
     fetchError.value = '';
     // 影响图与复盘摘要只在终态或首次加载时刷新，避免运行中反复轮询。
     if (terminalStatuses.includes(result.status) || !impact.value) {
-      loadAnalysis(requestedId, requestedVersion);
+      await loadAnalysis(requestedId, requestedVersion);
+    }
+    if (
+      requestedId === id.value &&
+      requestedVersion === version &&
+      !disposed &&
+      priorStatus !== null &&
+      priorStatus !== 'RESOLVED' &&
+      stableRecovery(result)
+    ) {
+      recoveryCardOpen.value = true;
     }
   } catch (cause) {
     if (requestedVersion === version && !disposed) fetchError.value = errorMessage(cause);
@@ -200,6 +217,26 @@ async function act(decision?: 'approve' | 'reject') {
   } finally {
     busy.value = false;
   }
+}
+
+function stableRecovery(item: Incident): boolean {
+  const verification = item.detail.verification;
+  return (
+    item.status === 'RESOLVED' &&
+    verification?.verdict === 'PASS' &&
+    !verification.window?.instability
+  );
+}
+
+const afterSample = computed(() => incident.value?.detail.verification?.samples.at(-1) ?? []);
+
+async function openRecoveryCard() {
+  if (!review.value) await loadAnalysis(id.value, version);
+  if (!review.value) {
+    ElMessage.warning('还没有可展示的复盘记录');
+    return;
+  }
+  recoveryCardOpen.value = true;
 }
 
 async function copyId() {
@@ -268,7 +305,7 @@ function evidenceSource(id: string): string {
 }
 
 // 依据 n 条定位处理 (V1-06)
-function locateCitations() {
+async function locateCitations() {
   const ids = incident.value?.detail.diagnosis?.evidence_ids ?? [];
   if (!ids.length) {
     ElMessage.info('暂无关联的证据引用');
@@ -276,10 +313,13 @@ function locateCitations() {
   }
   const firstId = ids[0];
   highlightedEvidenceId.value = firstId;
+  await nextTick();
   const el = document.getElementById(`evidence-${firstId}`);
-  if (el) {
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (!el) {
+    ElMessage.warning('没有在工单证据里找到这条诊断依据');
+    return;
   }
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   setTimeout(() => {
     highlightedEvidenceId.value = '';
   }, 1800);
@@ -397,6 +437,8 @@ function openAuditDrawer() {
 
 onMounted(load);
 watch(id, () => {
+  statusBeforeLoad.value = null;
+  recoveryCardOpen.value = false;
   incident.value = null;
   fetchError.value = '';
   actionError.value = '';
@@ -568,6 +610,9 @@ onUnmounted(() => {
             <p class="root-cause-summary">
               {{ diagnosisSummary }}
             </p>
+            <p v-if="incident.detail.repair_note" class="help-text">
+              {{ incident.detail.repair_note }}
+            </p>
 
             <div class="root-cause-foot">
               <button type="button" class="text-button text-12" @click="openDiagnosisDrawer">
@@ -653,6 +698,33 @@ onUnmounted(() => {
             <h2>服务影响图</h2>
             <span class="muted text-12">三类关系分开标注，不混为一谈</span>
           </div>
+
+          <div v-if="impact.rule_explanation || impact.model_inference" class="filter-bar">
+            <span class="muted text-12">规则解释</span>
+            <span class="text-12">
+              {{
+                impact.rule_explanation?.decisive
+                  ? impact.rule_explanation.abstain
+                    ? '没有可恢复根因'
+                    : rootCauseName(impact.rule_explanation.root_cause)
+                  : '不能唯一确定'
+              }}
+            </span>
+            <span v-if="impact.rule_explanation?.rule_ms != null" class="muted text-12">
+              {{ impact.rule_explanation.rule_ms }} ms，不消耗 token
+            </span>
+            <span class="muted text-12">模型推断</span>
+            <span class="text-12">
+              {{
+                incident.detail.diagnosis_source === 'registered_repair'
+                  ? '模型没有给出可用结论'
+                  : rootCauseName(impact.model_inference?.root_cause)
+              }}
+            </span>
+          </div>
+          <p v-if="impact.rule_explanation?.reason" class="help-text">
+            {{ impact.rule_explanation.reason }}
+          </p>
 
           <div class="filter-bar">
             <span class="muted text-12">已观测异常</span>
@@ -767,13 +839,23 @@ onUnmounted(() => {
         <section v-if="review" class="proto-card">
           <div class="section-heading">
             <h2>复盘摘要</h2>
-            <a
-              :href="`/api/incidents/${encodeURIComponent(String(incident?.id ?? ''))}/review.md`"
-              download
-              class="text-link text-12"
-            >
-              Markdown ↓
-            </a>
+            <div class="heading-actions">
+              <button
+                v-if="incident && stableRecovery(incident)"
+                type="button"
+                class="text-button text-12"
+                @click="openRecoveryCard"
+              >
+                查看修复对比
+              </button>
+              <a
+                :href="`/api/incidents/${encodeURIComponent(String(incident?.id ?? ''))}/review.md`"
+                download
+                class="text-link text-12"
+              >
+                Markdown ↓
+              </a>
+            </div>
           </div>
 
           <div class="filter-bar">
@@ -1069,9 +1151,24 @@ onUnmounted(() => {
         </section>
 
         <!-- 工单复测卡片 (V1-10) -->
-        <VerificationPanel :incident="incident" @inspect-verification="openVerificationDrawer" />
+        <VerificationPanel :incident="incident" @inspect-verification="openVerificationDrawer">
+          <template #actions>
+            <button
+              v-if="stableRecovery(incident)"
+              type="button"
+              class="text-button text-12"
+              @click="openRecoveryCard"
+            >
+              查看修复对比
+            </button>
+          </template>
+        </VerificationPanel>
       </aside>
     </div>
+
+    <ElDialog v-model="recoveryCardOpen" title="修复对比" width="920px" align-center>
+      <RecoveryCard v-if="review" :review="review" :after-sample="afterSample" />
+    </ElDialog>
 
     <!-- 统一详情侧栏 (V1-08) -->
     <DetailDrawer
