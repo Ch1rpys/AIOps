@@ -83,7 +83,7 @@ def scenarios():
 
 @router.post("/scenarios/{scenario}/inject", dependencies=admin, status_code=201)
 def inject(scenario: Scenario, body: Confirmation, key: Key, service=Depends(platform)):
-    return service.inject(scenario, key)
+    return service.inject(scenario, key, body.poison)
 
 
 @router.post("/lab/reset", dependencies=admin)

@@ -75,11 +75,11 @@ export const api = {
     return request<IncidentSummary[]>(`/incidents?${query}`);
   },
   incident: (id: string) => request<Incident>(`/incidents/${encodeURIComponent(id)}`),
-  inject: (scenario: ScenarioKey, key: string) =>
+  inject: (scenario: ScenarioKey, key: string, poison = false) =>
     request<{ incident_id: string }>(
       `/scenarios/${encodeURIComponent(scenario)}/inject`,
       'POST',
-      { confirm: true },
+      { confirm: true, poison },
       key,
       true,
     ),

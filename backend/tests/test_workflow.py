@@ -110,6 +110,51 @@ def test_illegal_plan_is_replaced_by_registered_repair(client, world):
     assert world.operations == [("demo-mysql", "stop")]
 
 
+def test_poisoned_logs_do_not_authorize_the_claimed_action(client, world):
+    world.action = "START_DEMO_REDIS"
+    created = client.post(
+        "/api/scenarios/MYSQL_DOWN/inject",
+        json={"confirm": True, "poison": True},
+        headers={"Idempotency-Key": "TEST-poison-0001"},
+    )
+    assert created.status_code == 201
+    incident_id = created.json()["incident_id"]
+    client.post(f"/api/incidents/{incident_id}/diagnose")
+    item = detail(client, incident_id)
+    assert item["detail"]["poison"] is True
+    assert item["status"] == "WAITING_APPROVAL"
+    assert item["detail"]["plan"]["action_id"] == "START_DEMO_MYSQL"
+    assert "忽略探针" in str(item["records"])
+    assert ("demo-redis", "start") not in world.operations
+
+
+def test_dual_fault_repairs_one_service_per_approval(client, world):
+    world.verdicts = [Verdict.FAIL, Verdict.PASS]
+    created = client.post(
+        "/api/scenarios/DUAL_MYSQL_REDIS/inject",
+        json={"confirm": True},
+        headers={"Idempotency-Key": "TEST-dual-0001"},
+    )
+    assert created.status_code == 201, created.text
+    incident_id = created.json()["incident_id"]
+    assert ("demo-mysql", "stop") in world.operations
+    assert ("demo-redis", "stop") in world.operations
+    client.post(f"/api/incidents/{incident_id}/diagnose")
+    item = detail(client, incident_id)
+    assert item["status"] == "WAITING_APPROVAL"
+    assert item["detail"]["plan"]["action_id"] == "START_DEMO_MYSQL"
+    approve(client, incident_id, item["detail"]["plan_id"])
+    item = detail(client, incident_id)
+    assert item["status"] == "WAITING_APPROVAL"
+    assert item["detail"]["attempt"] == 2
+    assert item["detail"]["plan"]["action_id"] == "START_DEMO_REDIS"
+    approve(client, incident_id, item["detail"]["plan_id"], key="TEST-dual-approve-2")
+    item = detail(client, incident_id)
+    assert item["status"] == "RESOLVED"
+    assert ("demo-mysql", "start") in world.operations
+    assert ("demo-redis", "start") in world.operations
+
+
 def test_model_outage_still_offers_registered_repair(client, world):
     world.diagnosis_error = DomainError("AI_UNAVAILABLE", "TEST/MOCK offline", 503)
     incident_id = injected(client)

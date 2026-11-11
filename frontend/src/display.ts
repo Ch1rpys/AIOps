@@ -28,6 +28,7 @@ export const scenarioLabels: Record<string, string> = {
   NGINX_502: 'Nginx 代理故障',
   NGINX_UPSTREAM: 'Nginx 上游配置错误',
   APP_HTTP_500: '应用固定 500',
+  DUAL_MYSQL_REDIS: 'MySQL 与 Redis 同时停止',
 };
 
 export const rootCauseLabels: Record<string, string> = {

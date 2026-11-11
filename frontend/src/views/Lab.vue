@@ -18,6 +18,7 @@ const error = ref('');
 const busy = ref(false);
 const injectingKey = ref<string | null>(null);
 const confirmation = ref<Scenario | null>(null);
+const poison = ref(false);
 const showBaselineDetails = ref(false);
 const injectKeys = new Map<ScenarioKey, string>();
 
@@ -60,6 +61,23 @@ async function reload() {
   await Promise.all([refresh(), loadScenarios()]);
 }
 
+function stopsContainer(scenario: Scenario): boolean {
+  return scenario.key !== 'NGINX_UPSTREAM' && scenario.key !== 'APP_HTTP_500';
+}
+
+function injectLead(scenario: Scenario): string {
+  if (scenario.key === 'NGINX_UPSTREAM') {
+    return `不会停止容器。将把 ${scenario.target} 的上游改到一个无法连接的地址，注入 ${scenario.name}。`;
+  }
+  if (scenario.key === 'APP_HTTP_500') {
+    return `不会停止容器。将让应用的业务接口固定返回 500，注入 ${scenario.name}。`;
+  }
+  if (scenario.key === 'DUAL_MYSQL_REDIS') {
+    return `将同时停止 demo-mysql 和 demo-redis，注入 ${scenario.name}。先批准一个恢复动作，另一个仍失败时再批准第二次。`;
+  }
+  return `将停止隔离容器 ${scenario.target}，注入 ${scenario.name}。`;
+}
+
 async function inject() {
   const selected = confirmation.value;
   if (!selected || busy.value) return;
@@ -70,7 +88,7 @@ async function inject() {
   const key = injectKeys.get(selected.key) ?? crypto.randomUUID();
   injectKeys.set(selected.key, key);
   try {
-    const result = await api.inject(selected.key, key);
+    const result = await api.inject(selected.key, key, poison.value);
     injectKeys.delete(selected.key);
     await router.push(`/incidents/${result.incident_id}`);
   } catch (cause) {
@@ -226,18 +244,20 @@ onMounted(loadScenarios);
   >
     <template v-if="confirmation">
       <p style="font-size: 14px; line-height: 22px">
-        将停止隔离容器 <strong class="mono">{{ confirmation.target }}</strong
-        >，注入 <strong>{{ confirmation.name }}</strong
-        >。
+        {{ injectLead(confirmation) }}
       </p>
       <p class="help-text" style="margin-top: 8px">
-        停止后平台将立即采集真实日志与探针证据。恢复需在工作台批准白名单动作或在环境管理中确认重置。
+        平台随后采集真实日志与探针。恢复仍要在工作台批准白名单动作，或在环境管理中确认重置。
       </p>
+      <label class="inline-label" style="margin-top: 12px">
+        <input v-model="poison" type="checkbox" />
+        <span>附带一段错误日志。它只作为证据，不能当成要执行的指令。</span>
+      </label>
     </template>
     <template #footer>
       <ElButton @click="confirmation = null">取消</ElButton>
       <ElButton type="danger" :disabled="busy || loading || !!blockedReason" @click="inject">
-        确认停止并注入
+        {{ confirmation && stopsContainer(confirmation) ? '确认停止并注入' : '确认注入' }}
       </ElButton>
     </template>
   </ElDialog>

@@ -36,6 +36,12 @@ class TestWorld:
         Scenario.NGINX_502: ("nginx_hello",),
         Scenario.NGINX_UPSTREAM: ("nginx_hello",),
         Scenario.APP_HTTP_500: ("nginx_hello",),
+        Scenario.DUAL_MYSQL_REDIS: (
+            "mysql_select_1",
+            "app_db_check",
+            "redis_roundtrip",
+            "app_cache_check",
+        ),
     }
     BASELINE_PROBES = (
         "mysql_select_1",
@@ -76,8 +82,20 @@ class TestWorld:
         self.vision_error = None
 
     @property
+    def stopped_service(self) -> str | None:
+        if not self._stopped:
+            return None
+        if len(self._stopped) == 1:
+            return next(iter(self._stopped))
+        return "demo-mysql" if "demo-mysql" in self._stopped else next(iter(self._stopped))
+
+    @stopped_service.setter
+    def stopped_service(self, value: str | None) -> None:
+        self._stopped = {value} if value else set()
+
+    @property
     def stopped(self) -> bool:
-        return self.stopped_service is not None
+        return bool(self._stopped)
 
     @stopped.setter
     def stopped(self, value: bool) -> None:
@@ -87,7 +105,7 @@ class TestWorld:
     def snapshot(self):
         return {
             s: {
-                "state": "exited" if self.stopped_service == s else "running",
+                "state": "exited" if s in self._stopped else "running",
                 "health": "healthy",
                 "project": COMPOSE_PROJECT,
             }
@@ -98,9 +116,9 @@ class TestWorld:
         self.operations.append((service, operation))
         if operation == "stop":
             if not self.stop_has_no_effect:
-                self.stopped_service = service
-        elif self.stopped_service == service:
-            self.stopped_service = None
+                self._stopped.add(service)
+        elif operation == "start":
+            self._stopped.discard(service)
         return {"exit_code": 0, "service": service, "operation": operation, "mode": "TEST/MOCK"}
 
     def apply_nginx_upstream(self, profile):
@@ -126,14 +144,16 @@ class TestWorld:
         return f"TEST/MOCK {service} connection refused password=private"
 
     def probe_for(self, name):
-        failing = self.FAILING_BY_SERVICE.get(self.stopped_service, ())
+        failing: set[str] = set()
+        for service in self._stopped:
+            failing.update(self.FAILING_BY_SERVICE.get(service, ()))
         verdict = (
             Verdict.UNKNOWN
             if self.missing_evidence
             else (Verdict.FAIL if name in failing else Verdict.PASS)
         )
         observed = {"mode": "TEST/MOCK"}
-        if name == "nginx_hello" and self.stopped_service == "demo-app":
+        if name == "nginx_hello" and "demo-app" in self._stopped:
             observed = {"status_code": 502, "mode": "TEST/MOCK"}
         if (
             name == "nginx_hello"
@@ -161,10 +181,13 @@ class TestWorld:
 
     def verify(self, on_sample, scenario=Scenario.MYSQL_DOWN):
         verdict = self.verdicts.pop(0) if len(self.verdicts) > 1 else self.verdicts[0]
-        self.stopped = verdict == Verdict.FAIL
+        if verdict == Verdict.FAIL:
+            self._stopped.add(self.stopped_service or "demo-mysql")
+        elif len(self._stopped) <= 1:
+            self._stopped.clear()
         probes = [
             Probe(name=name, verdict=verdict, observed={"mode": "TEST/MOCK"})
-            for name in ("mysql_select_1", "app_db_check")
+            for name in self.CHECKS_BY_SCENARIO.get(scenario, ("mysql_select_1", "app_db_check"))
         ]
         on_sample(probes)
         window = None

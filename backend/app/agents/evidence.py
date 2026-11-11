@@ -156,11 +156,35 @@ def _all_running(states: dict) -> bool:
     )
 
 
-def fault_observed(evidence: list[Evidence], scenario: Scenario = Scenario.MYSQL_DOWN) -> bool:
-    definition = SCENARIOS[scenario]
+def _snapshot_and_probes(evidence: list[Evidence]) -> tuple[dict, list[Probe]]:
     states = [e.raw for e in evidence if e.kind == "container_state"]
     probes = [Probe.model_validate(e.raw) for e in evidence if e.kind == "probe"]
-    snapshot = states[-1] if states else {}
+    return (states[-1] if states else {}), probes
+
+
+def service_fault(evidence: list[Evidence], service: str, checks: tuple[str, ...]) -> bool:
+    snapshot, probes = _snapshot_and_probes(evidence)
+    failed = {probe.name for probe in probes if probe.verdict == Verdict.FAIL}
+    return snapshot.get(service, {}).get("state") == "exited" and set(checks) <= failed
+
+
+def remaining_fault(evidence: list[Evidence], scenario: Scenario = Scenario.MYSQL_DOWN) -> bool:
+    """还有没有该场景尚未恢复的故障。双故障在修完一个之后仍然为真。"""
+    definition = SCENARIOS[scenario]
+    if definition.inject == "stop_pair":
+        return service_fault(
+            evidence, "demo-mysql", ("mysql_select_1", "app_db_check")
+        ) or service_fault(evidence, "demo-redis", ("redis_roundtrip", "app_cache_check"))
+    return fault_observed(evidence, scenario)
+
+
+def fault_observed(evidence: list[Evidence], scenario: Scenario = Scenario.MYSQL_DOWN) -> bool:
+    definition = SCENARIOS[scenario]
+    snapshot, probes = _snapshot_and_probes(evidence)
+    if definition.inject == "stop_pair":
+        return service_fault(
+            evidence, "demo-mysql", ("mysql_select_1", "app_db_check")
+        ) and service_fault(evidence, "demo-redis", ("redis_roundtrip", "app_cache_check"))
     if definition.inject == "nginx_upstream":
         return _all_running(snapshot) and any(
             probe.name == "nginx_hello"
@@ -174,7 +198,7 @@ def fault_observed(evidence: list[Evidence], scenario: Scenario = Scenario.MYSQL
             for probe in probes
         )
     return (
-        bool(states)
+        bool(snapshot)
         and snapshot.get(definition.target, {}).get("state") == "exited"
         and (
             scenario != Scenario.NGINX_502
@@ -194,6 +218,14 @@ def observations_available(
     definition = SCENARIOS[scenario]
     states = [item.raw for item in evidence if item.kind == "container_state"]
     probes = [Probe.model_validate(item.raw) for item in evidence if item.kind == "probe"]
+    if definition.inject == "stop_pair":
+        snapshot = states[-1] if states else {}
+        return (
+            bool(snapshot.get("demo-mysql"))
+            and bool(snapshot.get("demo-redis"))
+            and {probe.name for probe in probes if probe.verdict != Verdict.UNKNOWN}
+            >= set(definition.checks)
+        )
     return (
         bool(states)
         and bool(states[-1].get(definition.target))
@@ -225,6 +257,14 @@ def validate_execution_preconditions(
     模型自报「证据不足」时必须拦下，不能放行到审批页。
     """
     definition = SCENARIOS[scenario]
+    if definition.inject == "stop_pair":
+        if (
+            not diagnosis.evidence_sufficient
+            or diagnosis.root_cause not in {"MYSQL_SERVICE_STOPPED", "REDIS_SERVICE_STOPPED"}
+            or not remaining_fault(evidence, scenario)
+        ):
+            raise DomainError("EVIDENCE_INSUFFICIENT", "根因与实测证据不足以支持恢复操作")
+        return
     if not definition.recoverable:
         raise DomainError("EVIDENCE_INSUFFICIENT", "该故障没有注册恢复动作，不能进入审批")
     if (

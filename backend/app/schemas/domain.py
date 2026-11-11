@@ -24,6 +24,7 @@ class Scenario(StrEnum):
     NGINX_502 = "NGINX_502"
     NGINX_UPSTREAM = "NGINX_UPSTREAM"
     APP_HTTP_500 = "APP_HTTP_500"
+    DUAL_MYSQL_REDIS = "DUAL_MYSQL_REDIS"
 
 
 class Action(StrEnum):
@@ -190,6 +191,8 @@ class Plan(StrictModel):
 
 class Confirmation(StrictModel):
     confirm: StrictBool
+    # 工作台可选：把一段错误根因写进日志。只作为证据，不改变允许执行的动作。
+    poison: StrictBool = False
 
     @field_validator("confirm")
     @classmethod

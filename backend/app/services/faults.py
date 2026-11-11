@@ -7,6 +7,14 @@ from app.schemas.domain import Scenario
 
 def apply_fault(docker, scenario: Scenario) -> dict:
     definition = SCENARIOS[scenario]
+    if definition.inject == "stop_pair":
+        return {
+            "operation": "stop_pair",
+            "outputs": [
+                docker.change("demo-mysql", "stop"),
+                docker.change("demo-redis", "stop"),
+            ],
+        }
     if definition.inject == "stop":
         return docker.change(definition.target, "stop")
     if definition.inject == "nginx_upstream":
@@ -18,6 +26,14 @@ def apply_fault(docker, scenario: Scenario) -> dict:
 
 def clear_fault(docker, scenario: Scenario) -> dict:
     definition = SCENARIOS[scenario]
+    if definition.inject == "stop_pair":
+        return {
+            "operation": "start_pair",
+            "outputs": [
+                docker.change("demo-mysql", "start"),
+                docker.change("demo-redis", "start"),
+            ],
+        }
     if definition.inject == "stop":
         return docker.change(definition.target, "start")
     if definition.inject == "nginx_upstream":

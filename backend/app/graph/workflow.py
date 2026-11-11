@@ -11,8 +11,8 @@ from langgraph.types import interrupt
 
 from app.agents.evidence import (
     EvidenceAgent,
-    fault_observed,
     observations_available,
+    remaining_fault,
     validate_evidence_integrity,
     validate_execution_preconditions,
 )
@@ -31,6 +31,7 @@ from app.schemas.domain import (
     new_id,
     now,
 )
+from app.services.adversarial import apply_poison
 from app.services.executor import ActionExecutor, validate_plan
 from app.services.repair import (
     DIAGNOSIS_ATTEMPTS,
@@ -200,10 +201,17 @@ class Workflow:
 
     def collect(self, state: IncidentState):
         def operation():
+            scenario = Scenario(state.get("scenario_key", "MYSQL_DOWN"))
+            with self.store.session() as session:
+                poisoned = bool(
+                    self.store.require(session, state["incident_id"]).detail.get("poison")
+                )
             items = self.evidence_agent.collect(
-                Scenario(state.get("scenario_key", "MYSQL_DOWN")),
+                scenario,
                 attachments=self.attachments_of(state),
             )
+            if poisoned:
+                items = apply_poison(items, scenario)
             with self.store.session() as session, session.begin():
                 for item in items:
                     self.store.audit(
@@ -232,7 +240,7 @@ class Workflow:
         collected = [Evidence.model_validate(e) for e in state["evidence"]]
         scenario = Scenario(state.get("scenario_key", "MYSQL_DOWN"))
         # 观测还不完整时，只要该场景的故障已经被探针证实，就继续诊断，不在采证处停住。
-        if observations_available(collected, scenario) or fault_observed(collected, scenario):
+        if observations_available(collected, scenario) or remaining_fault(collected, scenario):
             return "diagnose"
         if state["collect_count"] < 2:
             return "collect"
@@ -262,7 +270,7 @@ class Workflow:
                     }
                 collected = [Evidence.model_validate(item) for item in state["evidence"]]
                 scenario = Scenario(state.get("scenario_key", "MYSQL_DOWN"))
-                if not fault_observed(collected, scenario):
+                if not remaining_fault(collected, scenario):
                     raise DomainError("EVIDENCE_CONFLICT", conflict)
             collected = [Evidence.model_validate(e) for e in state["evidence"]]
             scenario = Scenario(state.get("scenario_key", "MYSQL_DOWN"))
@@ -477,7 +485,7 @@ class Workflow:
             collected = [Evidence.model_validate(item) for item in state["evidence"]]
             # 截图不能决定恢复。探针没有证实故障时才停；故障已证实就继续修。
             conflict = self.attachment_conflict(state)
-            if conflict and not fault_observed(collected, scenario):
+            if conflict and not remaining_fault(collected, scenario):
                 raise DomainError("EVIDENCE_CONFLICT", conflict)
             context = {
                 "diagnosis": state["diagnosis"],
@@ -503,13 +511,13 @@ class Workflow:
                         result,
                         "model",
                         attempt,
-                        require_repair=fault_observed(collected, scenario),
+                        require_repair=remaining_fault(collected, scenario),
                     )
                 except DomainError as error:
                     last_error = error
                     feedback = repair_feedback(error)
             fallback = (
-                registered_plan(scenario)
+                registered_plan(scenario, collected)
                 if probes_support_registered_fix(collected, scenario)
                 else None
             )
@@ -550,7 +558,7 @@ class Workflow:
             explanation = explain_from_evidence(collected)
             rule_ms = int(explanation.get("rule_ms") or 0)
             diagnosis = Diagnosis.model_validate(state["diagnosis"])
-            confirmed = fault_observed(collected, scenario)
+            confirmed = remaining_fault(collected, scenario)
             self.phase(
                 state,
                 Status.DIAGNOSING,

@@ -535,6 +535,8 @@ class Store:
             if cohort == "abstain":
                 _accumulate_abstain(abstain, item)
                 continue
+            if cohort == "dual":
+                continue
             bucket = arms.setdefault(
                 item.arm,
                 {

@@ -665,6 +665,8 @@ class EvaluationService:
     def _stored_cohort(scenario: Scenario, cohort: str) -> str:
         if cohort == "adversarial":
             return "adversarial"
+        if not SCENARIOS[scenario].score_in_accuracy:
+            return "dual"
         if not SCENARIOS[scenario].recoverable:
             return "abstain"
         return "standard"

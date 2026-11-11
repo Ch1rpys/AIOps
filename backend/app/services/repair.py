@@ -4,7 +4,7 @@
 探针没有证实故障时，不编造修复。
 """
 
-from app.agents.evidence import fault_observed
+from app.agents.evidence import remaining_fault, service_fault
 from app.config import DomainError
 from app.scenarios import SCENARIOS
 from app.schemas.domain import Action, Diagnosis, Evidence, Plan, Scenario, required_evidence_ids
@@ -36,7 +36,7 @@ def probes_support_registered_fix(
     definition = SCENARIOS[scenario]
     if definition.action == Action.NO_ACTION:
         return False
-    return fault_observed(evidence, scenario)
+    return remaining_fault(evidence, scenario)
 
 
 def registered_diagnosis(evidence: list[Evidence], scenario: Scenario) -> Diagnosis | None:
@@ -56,13 +56,22 @@ def registered_diagnosis(evidence: list[Evidence], scenario: Scenario) -> Diagno
     )
 
 
-def registered_plan(scenario: Scenario) -> Plan | None:
+def registered_plan(scenario: Scenario, evidence: list[Evidence] | None = None) -> Plan | None:
     definition = SCENARIOS[scenario]
     if definition.action == Action.NO_ACTION:
         return None
+    action_id = definition.action
+    target = definition.target
+    if definition.inject == "stop_pair" and evidence is not None:
+        if service_fault(evidence, "demo-mysql", ("mysql_select_1", "app_db_check")):
+            action_id, target = Action.START_DEMO_MYSQL, "demo-mysql"
+        elif service_fault(evidence, "demo-redis", ("redis_roundtrip", "app_cache_check")):
+            action_id, target = Action.START_DEMO_REDIS, "demo-redis"
+        else:
+            return None
     return Plan(
-        action_id=definition.action,
-        target=definition.target,
+        action_id=action_id,
+        target=target,
         reason="模型给出的计划不能执行。探针仍显示故障，改为该场景已注册的恢复动作，批准后才会执行。",
         risk="LOW",
         expected_checks=list(definition.checks),

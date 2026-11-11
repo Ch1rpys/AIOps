@@ -1,6 +1,11 @@
 export type Verdict = 'PASS' | 'FAIL' | 'UNKNOWN';
 export type ScenarioKey =
-  'MYSQL_DOWN' | 'REDIS_DOWN' | 'NGINX_502' | 'NGINX_UPSTREAM' | 'APP_HTTP_500';
+  | 'MYSQL_DOWN'
+  | 'REDIS_DOWN'
+  | 'NGINX_502'
+  | 'NGINX_UPSTREAM'
+  | 'APP_HTTP_500'
+  | 'DUAL_MYSQL_REDIS';
 export type Status =
   | 'CREATED'
   | 'INJECTED'
@@ -119,6 +124,7 @@ export interface Incident extends IncidentSummary {
     diagnosis_source?: string;
     plan_source?: string;
     repair_note?: string | null;
+    poison?: boolean;
     model_error?: { code: string; message: string };
     error?: { code: string; message: string };
     verification?: {

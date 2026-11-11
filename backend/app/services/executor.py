@@ -15,9 +15,14 @@ def plan_violations(plan: Plan | dict, scenario: Scenario) -> list[str]:
     definition = SCENARIOS[scenario]
     data = plan if isinstance(plan, dict) else plan.model_dump(mode="json")
     action = data.get("action_id")
-    expected_target = "none" if action == Action.NO_ACTION else definition.target
+    allowed = (
+        dict(definition.action_targets)
+        if definition.action_targets
+        else {definition.action: definition.target}
+    )
+    expected_target = "none" if action == Action.NO_ACTION else allowed.get(action)
     violations: list[str] = []
-    if action not in {definition.action, Action.NO_ACTION}:
+    if action not in {*allowed, Action.NO_ACTION}:
         violations.append(f"动作 {action} 不在场景白名单内")
     if data.get("target") != expected_target:
         violations.append(f"目标 {data.get('target')} 与场景不符")

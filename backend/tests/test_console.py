@@ -15,6 +15,10 @@ def test_all_scenarios_expose_matching_targets_and_checks(client):
         "NGINX_502": ("demo-app", ["nginx_hello"]),
         "NGINX_UPSTREAM": ("demo-nginx", ["nginx_hello"]),
         "APP_HTTP_500": ("demo-app", ["nginx_hello"]),
+        "DUAL_MYSQL_REDIS": (
+            "demo-mysql",
+            ["mysql_select_1", "app_db_check", "redis_roundtrip", "app_cache_check"],
+        ),
     }
     for item in items:
         assert item["enabled"] is True

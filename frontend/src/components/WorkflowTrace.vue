@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { durationLabel, objectValue } from '../display';
+import { durationLabel, objectValue, phaseLabels, timeLabel } from '../display';
 import type { AuditRecord, Incident } from '../types';
 
 const props = defineProps<{ incident: Incident }>();
@@ -19,6 +19,11 @@ const stages = [
 ];
 
 const steps = computed(() => props.incident.records.filter((r) => r.kind === 'step'));
+const replay = computed(() =>
+  [...steps.value].sort((left, right) =>
+    String(left.payload.started_at ?? '').localeCompare(String(right.payload.started_at ?? '')),
+  ),
+);
 
 // 轮次计算：是否有第 2 轮记录
 const maxAttempt = computed(() => {
@@ -257,6 +262,18 @@ function segmentDone(index: number): boolean {
               {{ subText(stage.phase, flowState(stage.phase)) }}
             </span>
           </button>
+        </li>
+      </ol>
+      <ol v-if="replay.length" class="replay">
+        <li v-for="step in replay" :key="step.id">
+          <time>{{ timeLabel(String(step.payload.started_at ?? '')) }}</time>
+          <strong>{{ phaseLabels[String(step.payload.phase)] ?? step.payload.phase }}</strong>
+          <span>{{ step.payload.status === 'SUCCEEDED' ? '完成' : '未完成' }}</span>
+          <span>{{
+            durationLabel(
+              typeof step.payload.elapsed_ms === 'number' ? step.payload.elapsed_ms : undefined,
+            )
+          }}</span>
         </li>
       </ol>
     </div>

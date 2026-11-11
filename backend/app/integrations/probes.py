@@ -146,6 +146,11 @@ class Probes:
             return self.mysql()
         if scenario == Scenario.REDIS_DOWN:
             return [self.by_name("redis_roundtrip"), self.by_name("app_cache_check")]
+        if scenario == Scenario.DUAL_MYSQL_REDIS:
+            return self.mysql() + [
+                self.by_name("redis_roundtrip"),
+                self.by_name("app_cache_check"),
+            ]
         return [self.by_name("nginx_hello")]
 
     def baseline(self) -> list[Probe]:

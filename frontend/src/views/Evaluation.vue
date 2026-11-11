@@ -219,6 +219,11 @@ onUnmounted(() => {
       <p class="muted text-12" style="margin-top: 4px">
         独立链路：只诊断、不提议处置，不产生任何执行动作。真值不进入模型上下文，也不出现在工作台。
       </p>
+      <p class="help-text">
+        A 比单次诊断，B 比同一份证据上的复核，C 比加上截图之后会不会改变结论。
+      </p>
+      <p class="help-text">正确率不含对抗样本，也不含应用固定 500 这类负例。</p>
+      <p class="help-text">非法动作即使被提出，也没有被执行。盲诊臂根本不产生处置提议。</p>
     </div>
     <ElButton :loading="loading" @click="load">刷新</ElButton>
   </div>

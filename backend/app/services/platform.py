@@ -140,8 +140,9 @@ class Platform:
             raise DomainError("OPERATION_UNCERTAIN", "前次操作结果未知，请检查并重置环境")
         return response
 
-    def inject(self, scenario: Scenario, key: str) -> dict:
-        scope, fingerprint = "inject", scenario.value
+    def inject(self, scenario: Scenario, key: str, poison: bool = False) -> dict:
+        scope = "inject"
+        fingerprint = f"{scenario.value}:poison" if poison else scenario.value
         with self.lock:
             with self.store.session() as session:
                 previous = self.replay(self.store.receipt(session, key, scope, fingerprint))
@@ -172,6 +173,7 @@ class Platform:
                         "planner_provider": type(self.workflow.planner).__name__,
                         "holmes_model": self.settings.holmes_model or "service_default",
                         "planner_model": self.settings.planner_model or "not_configured",
+                        "poison": poison,
                     },
                 )
                 session.add(item)

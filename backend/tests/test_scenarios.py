@@ -108,7 +108,14 @@ class ScenarioWorld(TestWorld):
         return Verification(verdict=judge(sample, scenario), samples=[sample])
 
 
-@pytest.mark.parametrize("scenario", [item for item in Scenario if SCENARIOS[item].recoverable])
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        item
+        for item in Scenario
+        if SCENARIOS[item].recoverable and SCENARIOS[item].inject != "stop_pair"
+    ],
+)
 @pytest.mark.parametrize("decision", ["approve", "reject"])
 def test_scenario_graph_end_to_end(settings, scenario, decision):
     world = ScenarioWorld()

@@ -2,12 +2,21 @@
 import { computed, ref } from 'vue';
 import { toPng } from 'html-to-image';
 import { ElMessage } from 'element-plus';
-import { actionName, probeName, rootCauseName, scenarioName } from '../display';
+import {
+  actionName,
+  durationLabel,
+  probeName,
+  rootCauseName,
+  scenarioName,
+  verdictLabels,
+} from '../display';
 import type { ImpactNode, IncidentReview, Probe } from '../types';
 
 const props = defineProps<{
   review: IncidentReview;
   afterSample?: Probe[];
+  verdict?: string;
+  elapsedMs?: number;
 }>();
 
 const capture = ref<HTMLElement | null>(null);
@@ -122,6 +131,30 @@ async function copyLink() {
     <article ref="capture" class="recovery-card">
       <header class="recovery-head">
         <p class="eyebrow">修复对比</p>
+        <dl class="score-strip">
+          <div>
+            <dt>根因</dt>
+            <dd>{{ rootCauseName(review.root_cause) }}</dd>
+          </div>
+          <div>
+            <dt>批准动作</dt>
+            <dd>
+              {{
+                review.approved_action.plan
+                  ? `${actionName(review.approved_action.plan.action_id)} → ${review.approved_action.plan.target}`
+                  : '没有已批准的动作'
+              }}
+            </dd>
+          </div>
+          <div>
+            <dt>复测</dt>
+            <dd>{{ verdict ? verdictLabels[verdict] || verdict : '尚未复测' }}</dd>
+          </div>
+          <div>
+            <dt>耗时</dt>
+            <dd>{{ durationLabel(elapsedMs) }}</dd>
+          </div>
+        </dl>
         <h2>
           {{ scenarioName(review.scenario) }}{{ review.status === 'RESOLVED' ? '已恢复' : '' }}
         </h2>
@@ -213,6 +246,26 @@ async function copyLink() {
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.04em;
+}
+.score-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0 0;
+}
+.score-strip div {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.score-strip dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+.score-strip dd {
+  margin: 2px 0 0;
+  font-weight: 700;
 }
 .compare {
   display: grid;

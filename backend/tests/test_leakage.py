@@ -15,7 +15,14 @@ from app.integrations.models import HolmesDiagnosisProvider
 from app.schemas.domain import Diagnosis, DomainReview
 
 # 场景标识：泄漏即等于告诉模型「这次注入的是哪个场景」。
-SCENARIO_MARKERS = ["MYSQL_DOWN", "REDIS_DOWN", "NGINX_502", "NGINX_UPSTREAM", "APP_HTTP_500"]
+SCENARIO_MARKERS = [
+    "MYSQL_DOWN",
+    "REDIS_DOWN",
+    "NGINX_502",
+    "NGINX_UPSTREAM",
+    "APP_HTTP_500",
+    "DUAL_MYSQL_REDIS",
+]
 # 答案标签：泄漏即等于把答案写进提示词。
 # 新标签在声明过的 Diagnosis 枚举里，出现在契约之外才算泄漏。
 ANSWER_LABELS = [

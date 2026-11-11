@@ -30,6 +30,7 @@ import {
   statusTone,
   terminalStatuses,
   timeLabel,
+  verdictLabels,
 } from '../display';
 import ServiceStatusBar from '../components/ServiceStatusBar.vue';
 import EvidencePanel from '../components/EvidencePanel.vue';
@@ -229,6 +230,12 @@ function stableRecovery(item: Incident): boolean {
 }
 
 const afterSample = computed(() => incident.value?.detail.verification?.samples.at(-1) ?? []);
+const reviewElapsed = computed(() => {
+  const item = review.value;
+  if (!item?.occurred_at || !item.finished_at) return undefined;
+  const elapsed = Date.parse(item.finished_at) - Date.parse(item.occurred_at);
+  return Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : undefined;
+});
 
 async function openRecoveryCard() {
   if (!review.value) await loadAnalysis(id.value, version);
@@ -435,7 +442,28 @@ function openAuditDrawer() {
   drawerVisible.value = true;
 }
 
-onMounted(load);
+const clock = ref(Date.now());
+let clockTimer = 0;
+const activeStatuses: Status[] = ['COLLECTING', 'DIAGNOSING', 'PLANNING', 'EXECUTING', 'VERIFYING'];
+
+const waitingText = computed(() => {
+  const current = incident.value;
+  if (!current || !activeStatuses.includes(current.status)) return '';
+  const steps = current.records.filter(
+    (record) => record.kind === 'step' && record.payload.phase === current.status,
+  );
+  const started = steps.at(-1)?.payload.started_at;
+  const origin = typeof started === 'string' ? Date.parse(started) : Date.parse(current.updated_at);
+  const elapsed = Number.isFinite(origin) ? Math.max(0, clock.value - origin) : 0;
+  return `${statusLabels[current.status]}进行中，已等待 ${durationLabel(elapsed)}。页面会继续刷新，这一步还没结束。`;
+});
+
+onMounted(() => {
+  clockTimer = window.setInterval(() => {
+    clock.value = Date.now();
+  }, 1000);
+  load();
+});
 watch(id, () => {
   statusBeforeLoad.value = null;
   recoveryCardOpen.value = false;
@@ -461,6 +489,7 @@ onUnmounted(() => {
   version++;
   clearTimeout(timer);
   clearTimeout(copyTimer);
+  clearInterval(clockTimer);
 });
 </script>
 
@@ -480,6 +509,38 @@ onUnmounted(() => {
   </div>
 
   <template v-if="incident">
+    <div class="stage-summary">
+      <div>
+        <span>阶段</span>
+        <strong>{{ statusLabels[incident.status] }}</strong>
+      </div>
+      <div>
+        <span>根因</span>
+        <strong>{{
+          incident.detail.diagnosis
+            ? rootCauseName(incident.detail.diagnosis.root_cause)
+            : '尚未得出'
+        }}</strong>
+      </div>
+      <div>
+        <span>待批准动作</span>
+        <strong>{{
+          incident.detail.plan ? actionName(incident.detail.plan.action_id) : '尚未生成'
+        }}</strong>
+      </div>
+      <div>
+        <span>复测</span>
+        <strong>{{
+          incident.detail.verification
+            ? verdictLabels[incident.detail.verification.verdict]
+            : '尚未复测'
+        }}</strong>
+      </div>
+    </div>
+    <p v-if="waitingText" class="notice">{{ waitingText }}</p>
+    <p v-if="incident.detail.poison" class="notice">
+      日志和截图里有一段不可信的根因说明。它只作为证据，不能当成要执行的指令。
+    </p>
     <!-- 页头规范 (V1-02) -->
     <div class="page-header">
       <div class="page-header-title-row">
@@ -713,6 +774,12 @@ onUnmounted(() => {
             <span v-if="impact.rule_explanation?.rule_ms != null" class="muted text-12">
               {{ impact.rule_explanation.rule_ms }} ms，不消耗 token
             </span>
+            <span class="muted text-12">已批准动作</span>
+            <span class="text-12">{{
+              incident.detail.plan
+                ? `${actionName(incident.detail.plan.action_id)} → ${incident.detail.plan.target}`
+                : '还没有'
+            }}</span>
             <span class="muted text-12">模型推断</span>
             <span class="text-12">
               {{
@@ -1167,7 +1234,13 @@ onUnmounted(() => {
     </div>
 
     <ElDialog v-model="recoveryCardOpen" title="修复对比" width="920px" align-center>
-      <RecoveryCard v-if="review" :review="review" :after-sample="afterSample" />
+      <RecoveryCard
+        v-if="review"
+        :review="review"
+        :after-sample="afterSample"
+        :verdict="incident.detail.verification?.verdict"
+        :elapsed-ms="reviewElapsed"
+      />
     </ElDialog>
 
     <!-- 统一详情侧栏 (V1-08) -->
