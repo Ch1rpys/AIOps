@@ -26,8 +26,16 @@ def version_of(store):
 
 def test_new_database_is_created_at_current_version(tmp_path):
     store = Store(tmp_path / "fresh.db")
-    assert version_of(store) == SCHEMA_VERSION == 3
-    assert {"incidents", "audit_records", "evaluation_runs", "evaluation_arms"} <= tables_of(store)
+    assert version_of(store) == SCHEMA_VERSION == 4
+    assert {
+        "incidents",
+        "audit_records",
+        "evaluation_runs",
+        "evaluation_arms",
+        "recipes",
+        "twin_trials",
+        "twin_certificates",
+    } <= tables_of(store)
     store.close()
 
 
@@ -45,7 +53,7 @@ def test_v1_database_upgrades_and_keeps_existing_rows(tmp_path):
     store.close()
 
     upgraded = Store(path)
-    assert version_of(upgraded) == 3
+    assert version_of(upgraded) == 4
     assert {"evaluation_runs", "evaluation_arms"} <= tables_of(upgraded)
     with upgraded.engine.begin() as connection:
         rows = connection.exec_driver_sql("SELECT id FROM incidents").fetchall()
@@ -56,10 +64,10 @@ def test_v1_database_upgrades_and_keeps_existing_rows(tmp_path):
 def test_version_never_downgrades_on_reopen(tmp_path):
     path = tmp_path / "reopen.db"
     first = Store(path)
-    assert version_of(first) == 3
+    assert version_of(first) == 4
     first.close()
     second = Store(path)
-    assert version_of(second) == 3
+    assert version_of(second) == 4
     second.close()
 
 
@@ -79,12 +87,27 @@ def test_v2_database_gains_the_cohort_column(tmp_path):
         connection.exec_driver_sql("PRAGMA user_version=2")
     store.close()
     upgraded = Store(path)
-    assert version_of(upgraded) == 3
+    assert version_of(upgraded) == 4
     with upgraded.engine.begin() as connection:
         row = connection.exec_driver_sql(
             "SELECT cohort FROM evaluation_runs WHERE id='eval_old'"
         ).one()
     assert row[0] == "standard"
+    upgraded.close()
+
+
+def test_v3_database_gains_recipe_tables(tmp_path):
+    path = tmp_path / "v3.db"
+    store = Store(path)
+    with store.engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE recipes")
+        connection.exec_driver_sql("DROP TABLE twin_trials")
+        connection.exec_driver_sql("DROP TABLE twin_certificates")
+        connection.exec_driver_sql("PRAGMA user_version=3")
+    store.close()
+    upgraded = Store(path)
+    assert version_of(upgraded) == 4
+    assert {"recipes", "twin_trials", "twin_certificates"} <= tables_of(upgraded)
     upgraded.close()
 
 

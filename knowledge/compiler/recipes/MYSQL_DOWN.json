@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "id": "rec_7a151be16faf",
+  "title": "数据库探针失败",
+  "primitives": [
+    {
+      "kind": "life",
+      "service": "demo-mysql",
+      "verb": "stop"
+    }
+  ],
+  "recoverable": true,
+  "negative": false,
+  "poison": false,
+  "canonical_scene": "MYSQL_DOWN",
+  "preferred_actions": [
+    "START_DEMO_MYSQL"
+  ],
+  "canonical_hash": "7a151be16faf2d603ab0796a7c0730c1764482d247fd19ad8102dba575e4fffd",
+  "holdout": false,
+  "compiler_version": 1,
+  "dirty": false,
+  "unsupported": false
+}

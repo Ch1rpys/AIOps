@@ -39,7 +39,11 @@ class ActionExecutor:
     def execute(self, incident_id: str, plan_id: str, plan: Plan) -> dict:
         with self.store.session() as session, session.begin():
             item = self.store.require(session, incident_id)
-            validate_plan(plan, Scenario(item.scenario_key))
+            try:
+                scenario = Scenario(item.scenario_key)
+            except ValueError:
+                scenario = Scenario.MYSQL_DOWN
+            validate_plan(plan, scenario)
             approvals = session.scalars(
                 select(Record).where(Record.incident_id == incident_id, Record.kind == "approval")
             ).all()

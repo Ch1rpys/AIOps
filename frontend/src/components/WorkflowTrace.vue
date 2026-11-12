@@ -13,6 +13,7 @@ const stages = [
   { phase: 'COLLECTING', label: '采证' },
   { phase: 'DIAGNOSING', label: '诊断' },
   { phase: 'PLANNING', label: '规划' },
+  { phase: 'TWIN_TRIAL', label: '影子试修' },
   { phase: 'APPROVAL', label: '审批' },
   { phase: 'EXECUTING', label: '执行' },
   { phase: 'VERIFYING', label: '复测' },
@@ -71,6 +72,12 @@ function representativeStep(phase: string): AuditRecord | undefined {
 function flowState(
   phase: string,
 ): 'done' | 'current' | 'waiting' | 'failed' | 'unknown' | 'pending' {
+  if (phase === 'TWIN_TRIAL') {
+    const trial = props.incident.detail.twin_trial;
+    if (!trial) return 'pending';
+    if (trial.skipped) return 'unknown';
+    return 'done';
+  }
   const attempt = currentViewAttempt.value;
   const isLatestAttempt = attempt === (props.incident.detail.attempt || 1);
   const match = stageSteps(phase).at(-1);
@@ -108,7 +115,10 @@ function subText(phase: string, state: string): string {
   if (state === 'current') return '进行中';
   if (state === 'waiting') return '待审批';
   if (state === 'failed') return '失败';
-  if (state === 'unknown') return '未知';
+  if (state === 'unknown') {
+    if (phase === 'TWIN_TRIAL') return '未预测';
+    return '未知';
+  }
   if (state === 'done') {
     const elapsed = stageElapsed(phase);
     if (elapsed !== undefined) return durationLabel(elapsed);

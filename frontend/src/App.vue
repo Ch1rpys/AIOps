@@ -14,6 +14,8 @@ const links = [
   { path: '/lab', label: '故障实验', icon: 'lab' },
   { path: '/environment', label: '环境管理', icon: 'env' },
   { path: '/environment?tab=probes', label: '基线探针', icon: 'probe' },
+  { path: '/compiler', label: '故障编译器', icon: 'archive' },
+  { path: '/twin', label: '影子世界', icon: 'env' },
   { path: '/incidents', label: '故障记录与报告', icon: 'archive' },
   { path: '/evaluation', label: '盲诊评测', icon: 'evaluate' },
 ];
@@ -28,6 +30,8 @@ const breadcrumb = computed(() => {
   if (route.path === '/environment') return route.query.tab === 'probes' ? '基线探针' : '环境管理';
   if (route.path === '/incidents') return '故障记录与报告';
   if (route.path === '/evaluation') return '盲诊评测';
+  if (route.path === '/compiler') return '故障编译器';
+  if (route.path === '/twin') return '影子世界';
   return '故障实验';
 });
 
@@ -207,11 +211,11 @@ watch(() => route.fullPath, loadRecent);
     <ElInput
       id="admin-token"
       :model-value="adminToken"
-      @update:model-value="onTokenInput"
       type="password"
       show-password
       placeholder="请输入 ADMIN_TOKEN"
       autocomplete="off"
+      @update:model-value="onTokenInput"
     />
     <p class="help-text">仅保存在本页，刷新后需重输。操作权限由服务端校验。</p>
     <template #footer>

@@ -168,6 +168,17 @@ def service_fault(evidence: list[Evidence], service: str, checks: tuple[str, ...
     return snapshot.get(service, {}).get("state") == "exited" and set(checks) <= failed
 
 
+def any_failing(evidence: list[Evidence]) -> bool:
+    _, probes = _snapshot_and_probes(evidence)
+    return any(probe.verdict == Verdict.FAIL for probe in probes)
+
+
+def observations_present(evidence: list[Evidence]) -> bool:
+    states = [item.raw for item in evidence if item.kind == "container_state"]
+    probes = [Probe.model_validate(item.raw) for item in evidence if item.kind == "probe"]
+    return bool(states) and any(probe.verdict != Verdict.UNKNOWN for probe in probes)
+
+
 def remaining_fault(evidence: list[Evidence], scenario: Scenario = Scenario.MYSQL_DOWN) -> bool:
     """还有没有该场景尚未恢复的故障。双故障在修完一个之后仍然为真。"""
     definition = SCENARIOS[scenario]

@@ -32,7 +32,7 @@ const notice = ref('');
 const evaluationView = ref(false);
 const scenario = ref<ScenarioKey>('MYSQL_DOWN');
 const arms = ref<EvaluationArm[]>(['A', 'B']);
-const cohort = ref<'standard' | 'adversarial'>('standard');
+const cohort = ref<'standard' | 'adversarial' | 'unseen'>('standard');
 const triggering = ref(false);
 const uploading = ref(false);
 const attachmentId = ref('');
@@ -49,9 +49,10 @@ const armLabel: Record<EvaluationArm, string> = {
   B: 'B · 多 Agent 复核',
   C: 'C · 增加视觉证据',
   L: 'L · 闭环规划',
+  R: 'R · 影子搜索基线',
 };
 
-function percent(value: number | null): string {
+function percent(value: number | null | undefined): string {
   if (value === null || value === undefined) return '不适用';
   return `${(value * 100).toFixed(1)}%`;
 }
@@ -160,7 +161,8 @@ async function uploadAttachment(event: Event) {
 }
 
 function onCohortChange(event: Event) {
-  cohort.value = (event.target as HTMLInputElement).checked ? 'adversarial' : 'standard';
+  const value = (event.target as HTMLSelectElement).value;
+  cohort.value = value === 'adversarial' || value === 'unseen' ? value : 'standard';
 }
 
 async function trigger() {
@@ -177,8 +179,8 @@ async function trigger() {
       return;
     }
     await api.triggerEvaluation(
-      scenario.value,
-      arms.value,
+      cohort.value === 'unseen' ? null : scenario.value,
+      arms.value.filter((arm) => arm !== 'R'),
       `EVAL-${Date.now()}`,
       [...(attachmentId.value ? [attachmentId.value] : [])],
       cohort.value,
@@ -186,7 +188,9 @@ async function trigger() {
     notice.value =
       cohort.value === 'adversarial'
         ? '对抗样本已触发：日志和截图里写入了错误根因。它不计入普通正确率。'
-        : '实验已触发：注入故障 → 固化证据快照 → 各臂在同一快照上诊断。';
+        : cohort.value === 'unseen'
+          ? '未见故障已触发：只抽 holdout，按校准签名计分，不与旧正确率合成。'
+          : '实验已触发：注入故障 → 固化证据快照 → 各臂在同一快照上诊断。';
     await load();
   } catch (cause) {
     error.value = errorMessage(cause);
@@ -222,8 +226,8 @@ onUnmounted(() => {
       <p class="help-text">
         A 比单次诊断，B 比同一份证据上的复核，C 比加上截图之后会不会改变结论。
       </p>
-      <p class="help-text">正确率不含对抗样本，也不含应用固定 500 这类负例。</p>
-      <p class="help-text">非法动作即使被提出，也没有被执行。盲诊臂根本不产生处置提议。</p>
+      <p class="help-text">正确率不含对抗样本，也不含应用固定 500 这类负例，更不含未见故障。</p>
+      <p class="help-text">未见故障按校准签名覆盖计分。R 臂只在影子里搜修复，不进入盲诊 prompt。</p>
     </div>
     <ElButton :loading="loading" @click="load">刷新</ElButton>
   </div>
@@ -237,6 +241,14 @@ onUnmounted(() => {
     </div>
     <div class="filter-bar">
       <label>
+        <span>样本组</span>
+        <select :value="cohort" :disabled="triggering" @change="onCohortChange">
+          <option value="standard">普通盲诊</option>
+          <option value="adversarial">对抗样本</option>
+          <option value="unseen">未见故障（holdout）</option>
+        </select>
+      </label>
+      <label v-if="cohort !== 'unseen'">
         <span>注入场景</span>
         <select v-model="scenario" :disabled="triggering">
           <option value="MYSQL_DOWN">MySQL 服务停止</option>
@@ -246,15 +258,7 @@ onUnmounted(() => {
           <option value="APP_HTTP_500">应用固定 500（负例，不恢复）</option>
         </select>
       </label>
-      <label class="inline-label">
-        <input
-          type="checkbox"
-          :checked="cohort === 'adversarial'"
-          :disabled="triggering"
-          @change="onCohortChange"
-        />
-        <span>对抗样本（投毒日志和截图，不计入正确率）</span>
-      </label>
+      <p v-else class="help-text">未见故障只抽 holdout。无令牌界面不会展示配方原语。</p>
       <label>
         <span>实验臂</span>
         <select v-model="arms" multiple :disabled="triggering" size="3" style="min-height: 82px">
@@ -455,6 +459,53 @@ onUnmounted(() => {
     </div>
     <p v-if="summary?.abstain" class="help-text">{{ summary.abstain.note }}</p>
 
+    <div v-if="summary?.unseen" class="section-heading" style="margin-top: 16px">
+      <h2>未见故障（单独分母）</h2>
+    </div>
+    <div v-if="summary?.unseen" class="filter-bar">
+      <span class="muted text-12">有效样本</span>
+      <span class="text-12">{{ summary.unseen.unseen_n ?? '不适用' }}</span>
+      <span class="muted text-12">签名覆盖</span>
+      <span class="text-12">{{ percent(summary.unseen.unseen_signature_recall) }}</span>
+      <span class="muted text-12">签名精确率</span>
+      <span class="text-12">{{ percent(summary.unseen.unseen_signature_precision) }}</span>
+      <span class="muted text-12">漂移剔除</span>
+      <span class="text-12">{{ summary.unseen.unseen_drift_excluded ?? '不适用' }}</span>
+      <span class="muted text-12">弱解析</span>
+      <span class="text-12">{{ summary.unseen.unseen_weak_parse ?? '不适用' }}</span>
+    </div>
+    <p v-if="summary?.unseen" class="help-text">
+      {{
+        summary.unseen.note ||
+        '未见故障不与 canonical 正确率合成。漂移不算模型答错。缺失 failing_check_ids 时弱解析并标明。'
+      }}
+    </p>
+
+    <div v-if="summary?.platform" class="section-heading" style="margin-top: 16px">
+      <h2>影子保真与 R 臂</h2>
+    </div>
+    <div v-if="summary?.platform" class="filter-bar">
+      <span class="muted text-12">影子可用</span>
+      <span class="text-12">{{
+        summary.platform.twin_available == null
+          ? '不适用'
+          : summary.platform.twin_available
+            ? '是'
+            : '否'
+      }}</span>
+      <span class="muted text-12">试修 / 跳过</span>
+      <span class="text-12">
+        {{ summary.platform.twin_trials ?? '不适用' }} /
+        {{ summary.platform.twin_skipped ?? '不适用' }}
+      </span>
+      <span class="muted text-12">保真度</span>
+      <span class="text-12">{{ percent(summary.platform.twin_fidelity) }}</span>
+      <span class="muted text-12">部分恢复预测</span>
+      <span class="text-12">{{ percent(summary.platform.twin_partial_predictions) }}</span>
+      <span class="muted text-12">R 臂消签名</span>
+      <span class="text-12">{{ percent(summary.platform.r_arm_resolve_rate) }}</span>
+    </div>
+
     <ul v-if="summary" class="help-text" style="margin-top: 10px">
       <li v-for="note in summary.notes" :key="note">{{ note }}</li>
     </ul>
@@ -499,6 +550,7 @@ onUnmounted(() => {
                 {{ armLabel[row.arm] ?? row.arm }}
                 <div v-if="row.cohort === 'adversarial'" class="muted text-12">对抗样本</div>
                 <div v-else-if="row.cohort === 'abstain'" class="muted text-12">负例</div>
+                <div v-else-if="row.cohort === 'unseen'" class="muted text-12">未见故障</div>
               </td>
               <td>
                 {{ row.root_cause ? rootCauseName(row.root_cause) : '—' }}

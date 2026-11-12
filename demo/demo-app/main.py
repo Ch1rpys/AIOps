@@ -1,11 +1,12 @@
 import logging
 import os
+import time
 from pathlib import Path
 
 import pymysql
 import redis
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 app = FastAPI(title="隔离故障实验应用")
 logger = logging.getLogger("demo-app")
@@ -13,14 +14,18 @@ TIMEOUT = 2
 MODE_FILE = os.environ.get("APP_MODE_FILE", "")
 
 
-def fixed_http_500() -> bool:
+def current_mode() -> str:
     """只认控制文件里的固定标记。读不到文件就按正常应答。"""
     if not MODE_FILE:
-        return False
+        return "ok"
     try:
-        return Path(MODE_FILE).read_text(encoding="utf-8").strip() == "http_500"
+        return Path(MODE_FILE).read_text(encoding="utf-8").strip() or "ok"
     except OSError:
-        return False
+        return "ok"
+
+
+def fixed_http_500() -> bool:
+    return current_mode() == "http_500"
 
 
 @app.get("/health")
@@ -30,8 +35,16 @@ def health():
 
 @app.get("/api/hello")
 def hello():
-    if fixed_http_500():
+    mode = current_mode()
+    if mode == "http_500":
         return JSONResponse(status_code=500, content={"status": "error", "code": "FIXED_500"})
+    if mode == "slow":
+        time.sleep(5)
+        return {"message": "hello from demo-app"}
+    if mode == "empty":
+        return Response(content=b"", status_code=200)
+    if mode == "wrong_json":
+        return {"message": "not the expected hello"}
     return {"message": "hello from demo-app"}
 
 

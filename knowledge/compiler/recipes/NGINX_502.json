@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "id": "rec_78322d1da7ea",
+  "title": "代理探针失败",
+  "primitives": [
+    {
+      "kind": "life",
+      "service": "demo-app",
+      "verb": "stop"
+    }
+  ],
+  "recoverable": true,
+  "negative": false,
+  "poison": false,
+  "canonical_scene": "NGINX_502",
+  "preferred_actions": [
+    "START_DEMO_APP"
+  ],
+  "canonical_hash": "78322d1da7ea5c3b0ce96ca00a2b2f87f57a36edbfd7ddb14dd0093706e655ed",
+  "holdout": false,
+  "compiler_version": 1,
+  "dirty": false,
+  "unsupported": false
+}

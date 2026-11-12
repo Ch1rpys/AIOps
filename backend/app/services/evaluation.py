@@ -102,6 +102,7 @@ class EvaluationService:
         provider,
         attachments=None,
         planner=None,
+        twin=None,
     ):
         self.settings, self.store = settings, store
         self.docker, self.probes = docker, probes
@@ -110,19 +111,24 @@ class EvaluationService:
         self.planner = planner
         # 视觉证据（C 臂）走同一套受控存储与识别服务。
         self.attachments = attachments
+        self.twin = twin
         self.lock = threading.RLock()
 
     # ---- 对外入口 ------------------------------------------------------------
 
     def run_experiment(
         self,
-        scenario: Scenario,
+        scenario: Scenario | None,
         arms: list[str],
         attachment_ids: list[str] | None = None,
         cohort: str = "standard",
+        recipe_id: str | None = None,
     ) -> dict:
         """一次盲诊实验：注入 → 固化快照 → 各臂在同一快照上对照。"""
         holder = new_id("eval")
+        if cohort == "unseen":
+            if "R" in arms:
+                raise DomainError("EVALUATION_ARM_UNSUPPORTED", "R 臂不进入盲诊", 409)
         if "C" in arms and not attachment_ids:
             # C 臂没有视觉证据就等于 B 臂：那是假对照，服务层也要拦住，
             # 不能只靠 API 层校验（脚本与后台任务同样会走到这里）。
@@ -134,10 +140,14 @@ class EvaluationService:
         with self.lock:
             self.store.acquire_evaluation_lease(holder)
             try:
+                if cohort == "unseen":
+                    return self._experiment_unseen(arms, attachment_ids or [], recipe_id)
+                if scenario is None:
+                    raise DomainError("RECIPE_INVALID", "非未见评测必须指定场景", 409)
                 return self._experiment(scenario, arms, attachment_ids or [], cohort)
             except Exception as error:
                 # 失败也要落库：不能因为实验失败就看不到这次尝试（§9.3）。
-                self._record_failure(scenario, arms, error, cohort)
+                self._record_failure(scenario or Scenario.MYSQL_DOWN, arms, error, cohort)
                 raise
             finally:
                 self.store.release_evaluation_lease(holder)
@@ -192,6 +202,115 @@ class EvaluationService:
         return self.store.evaluation_busy()
 
     # ---- 实验主流程 ----------------------------------------------------------
+
+    def _pick_holdout(self, recipe_id: str | None):
+        from app.services.compiler.enumerate import enumerate_recipes
+        from app.services.compiler.schema import Recipe
+        from app.services.compiler.split import is_holdout, load_holdout
+
+        if recipe_id:
+            recipe = self.store.get_recipe(recipe_id)
+            if recipe is None:
+                match = next((item for item in enumerate_recipes() if item.id == recipe_id), None)
+                if match is None:
+                    raise DomainError("RECIPE_INVALID", "配方不存在", 404)
+                recipe = match
+            if not is_holdout(recipe.id):
+                raise DomainError("SEEN_FORBIDDEN_IN_UNSEEN", "未见评测只能抽 holdout", 409)
+            return recipe
+        ids = list((load_holdout().get("ids") or []))
+        if not ids:
+            raise DomainError("COMPILER_VERSION_MISMATCH", "holdout 为空", 409)
+        chosen = ids[int(time.time()) % len(ids)]
+        recipe = self.store.get_recipe(chosen)
+        if recipe is None:
+            match = next((item for item in enumerate_recipes() if item.id == chosen), None)
+            if match is None:
+                raise DomainError("RECIPE_INVALID", "holdout 配方尚未生成", 409)
+            recipe = match
+        return recipe
+
+    def _experiment_unseen(
+        self, arms: list[str], attachment_ids: list[str], recipe_id: str | None
+    ) -> dict:
+        from app.services.compiler.apply import apply_recipe, undo_recipe
+        from app.services.compiler.calibrate import probes_match_signature
+        from app.services.compiler.split import is_holdout
+
+        recipe = self._pick_holdout(recipe_id)
+        if not is_holdout(recipe.id):
+            raise DomainError("SEEN_FORBIDDEN_IN_UNSEEN", "未见评测只能抽 holdout", 409)
+        if recipe.signature is None or recipe.signature.source != "calibrated":
+            from app.services.compiler.calibrate import prior_signature
+
+            # 测试夹具可注入 signature；未校准不得当评测真值。
+            if recipe.signature is None:
+                raise DomainError("RECIPE_NOT_CALIBRATED", "未校准不得注入评测", 409)
+        self.provider.ensure_capabilities()
+        baseline = lab_baseline(self.docker, self.probes)
+        if not baseline["healthy"]:
+            raise DomainError("BASELINE_UNHEALTHY", "四个 demo 服务与探针未全部通过，禁止评测", 409)
+        stopped = False
+        restored = False
+        container_ms = collect_ms = restore_ms = 0
+        drifted = False
+        evidence = []
+        visual = []
+        try:
+            container_started = time.monotonic()
+            apply_recipe(self.docker, recipe)
+            stopped = True
+            container_ms = round((time.monotonic() - container_started) * 1000)
+            started = time.monotonic()
+            evidence = self.evidence.collect_domain()
+            collect_ms = round((time.monotonic() - started) * 1000)
+            probes = [
+                __import__("app.schemas.domain", fromlist=["Probe"]).Probe.model_validate(item.raw)
+                for item in evidence
+                if item.kind == "probe"
+            ]
+            if recipe.signature and not probes_match_signature(probes, recipe.signature):
+                drifted = True
+            visual = self._visual_evidence(attachment_ids or [])
+        finally:
+            if stopped:
+                try:
+                    restore_started = time.monotonic()
+                    undo_recipe(self.docker, recipe)
+                    restored = lab_baseline(self.docker, self.probes)["healthy"]
+                    restore_ms = round((time.monotonic() - restore_started) * 1000)
+                except DomainError as error:
+                    logger.error("evaluation_restore_failed code=%s", error.code)
+                    restored = False
+        fingerprint = self._fingerprint(evidence)
+        rows = []
+        for arm in arms:
+            if arm == "L":
+                continue
+            record = self._run_arm(
+                arm,
+                Scenario.MYSQL_DOWN,
+                evidence,
+                fingerprint,
+                0,
+                {
+                    "collect_ms": collect_ms,
+                    "container_ms": container_ms,
+                    "restore_ms": restore_ms,
+                    "lab_restored": restored,
+                },
+                visual,
+                "unseen",
+                recipe=recipe,
+                drifted=drifted,
+            )
+            rows.append(record)
+        return {
+            "snapshot_hash": fingerprint,
+            "runs": rows,
+            "cohort": "unseen",
+            "drifted": drifted,
+        }
 
     def _experiment(
         self,
@@ -351,15 +470,28 @@ class EvaluationService:
         timings: dict,
         visual: list[Evidence] | None = None,
         cohort: str = "standard",
+        recipe=None,
+        drifted: bool = False,
     ) -> dict:
-        budget = Budget(
-            self.settings.evaluation_budget_seconds, self.settings.evaluation_max_model_calls
-        )
-        timeout = self.settings.evaluation_model_timeout
+        if cohort == "unseen":
+            budget = Budget(
+                self.settings.evaluation_unseen_budget_seconds,
+                self.settings.evaluation_max_model_calls,
+            )
+            timeout = self.settings.evaluation_unseen_model_timeout
+        else:
+            budget = Budget(
+                self.settings.evaluation_budget_seconds, self.settings.evaluation_max_model_calls
+            )
+            timeout = self.settings.evaluation_model_timeout
         visual = list(visual or [])
         # A/B 是纯文本证据；C 臂在同一份文本快照上再加视觉证据（§4.5）。
         arm_evidence = snapshot + (visual if arm == "C" else [])
-        payload = {"evidence": [item.model_dump(mode="json") for item in arm_evidence]}
+        from app.services.compiler.score import strip_recipe_leakage
+
+        payload = strip_recipe_leakage(
+            {"evidence": [item.model_dump(mode="json") for item in arm_evidence]}
+        )
         # 必引 id 仍按文本基线算：视觉证据是加分项，不是必引项。
         required = required_evidence_ids(snapshot)
         record: dict = {"extra_collects": extra_collects}
@@ -418,7 +550,16 @@ class EvaluationService:
             record["adversarial"] = self._blind_adversarial_score(
                 scenario, record.get("root_cause")
             )
-        return self._persist(arm, scenario, arm_evidence, fingerprint, record, cohort)
+        return self._persist(
+            arm,
+            scenario,
+            arm_evidence,
+            fingerprint,
+            record,
+            cohort,
+            recipe=recipe,
+            drifted=drifted,
+        )
 
     def _arm_a(
         self,
@@ -456,6 +597,8 @@ class EvaluationService:
             # 模型原始输出也留档：审计要的是模型真的说了什么（§9.3）。
             "raw_model_output": trace.raw.get("analysis"),
             "contract_violations": self._violations(diagnosis, snapshot),
+            "affected_services": list(diagnosis.affected_services or []),
+            "failing_check_ids": list(diagnosis.failing_check_ids or []),
         }
 
     @staticmethod
@@ -579,6 +722,8 @@ class EvaluationService:
                 "first": first.model_dump(mode="json"),
                 "review": review.model_dump(mode="json"),
             },
+            "affected_services": list(first.affected_services or []),
+            "failing_check_ids": list(first.failing_check_ids or []),
         }
 
     def _arm_loop(self, scenario: Scenario, snapshot: list[Evidence], budget: Budget) -> dict:
@@ -690,7 +835,92 @@ class EvaluationService:
         fingerprint: str,
         record: dict,
         cohort: str = "standard",
+        recipe=None,
+        drifted: bool = False,
     ) -> dict:
+        from app.schemas.domain import Diagnosis as DiagnosisModel
+        from app.services.compiler.score import score_unseen
+
+        if cohort == "unseen":
+            stored_cohort = "unseen"
+            truth_scenario = "UNSEEN"
+            fault_present = 0 if drifted else 1
+            score = None
+            correct, rejected = None, 0
+            status = record.get("status", "COMPLETED")
+            if status not in EXCLUDED_STATUS and recipe is not None:
+                try:
+                    diagnosis = DiagnosisModel.model_validate(
+                        {
+                            "root_cause": record.get("root_cause") or "OTHER",
+                            "summary": record.get("summary") or "未见故障诊断",
+                            "evidence_ids": record.get("evidence_ids") or ["ev_missing"],
+                            "confidence": record.get("confidence") or 0,
+                            "evidence_sufficient": bool(record.get("evidence_sufficient")),
+                            "affected_services": record.get("affected_services") or [],
+                            "failing_check_ids": record.get("failing_check_ids") or [],
+                        }
+                    )
+                except Exception:
+                    diagnosis = DiagnosisModel(
+                        root_cause="OTHER",
+                        summary=str(record.get("summary") or "未见故障诊断"),
+                        evidence_ids=["ev_missing"],
+                        confidence=0,
+                        evidence_sufficient=False,
+                    )
+                score = score_unseen(diagnosis, recipe, drifted=drifted)
+                if score.get("excluded") and score.get("reason") == "SIGNATURE_DRIFT":
+                    correct, rejected = None, 0
+                    fault_present = 0
+                elif score.get("excluded"):
+                    correct = score.get("correct")
+                    rejected = 1 if record.get("root_cause") == "INSUFFICIENT_EVIDENCE" else 0
+                else:
+                    recall = score.get("signature_recall")
+                    correct = 1 if isinstance(recall, (int, float)) and recall >= 1 else 0
+                    rejected = 1 if record.get("root_cause") == "INSUFFICIENT_EVIDENCE" else 0
+            run = EvaluationRun(
+                id=new_id("evalrun"),
+                arm=arm,
+                truth_scenario=truth_scenario,
+                snapshot_hash=fingerprint,
+                evidence_json={"items": [item.model_dump(mode="json") for item in snapshot]},
+                diagnosis_json=record,
+                correct=correct,
+                rejected=rejected,
+                fault_present=fault_present,
+                model_calls=record.get("model_calls"),
+                latency_ms=record.get("timing", {}).get("total_ms"),
+                token_usage=record.get("usage"),
+                created_at=now(),
+                cohort=stored_cohort,
+                recipe_id=recipe.id if recipe is not None else None,
+                signature_json=recipe.signature.model_dump(mode="json") if recipe and recipe.signature else None,
+                score_json=score,
+            )
+            arm_row = EvaluationArm(
+                id=new_id("evalarm"),
+                snapshot_hash=fingerprint,
+                model=self.settings.holmes_model or "service_default",
+                prompt_version=PROMPT_VERSION,
+                max_tokens=None,
+                timeout_s=self.settings.evaluation_model_timeout,
+                arm=arm,
+            )
+            self.store.save_evaluation_run(run, arm_row)
+            return {
+                "id": run.id,
+                "arm": arm,
+                "snapshot_hash": fingerprint,
+                "status": status,
+                "root_cause": record.get("root_cause"),
+                "correct": correct,
+                "rejected": rejected,
+                "fault_present": fault_present,
+                "model_calls": run.model_calls,
+                "latency_ms": run.latency_ms,
+            }
         definition = SCENARIOS[scenario]
         truth = definition.root_cause
         fault_present = 1 if fault_observed(snapshot, scenario) else 0

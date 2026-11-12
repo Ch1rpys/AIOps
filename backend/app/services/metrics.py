@@ -8,7 +8,7 @@
 
 from sqlalchemy import select
 
-from app.repositories.store import EvaluationRun, Incident, Record, Store
+from app.repositories.store import EvaluationRun, Incident, Record, TwinCertificate, TwinTrial, Store
 from app.schemas.domain import Scenario
 from app.services.executor import plan_violations
 
@@ -108,4 +108,52 @@ def adversarial_closed_loop(store: Store) -> dict:
         "illegal_proposals": illegal,
         "blocked_proposals": illegal,
         "illegal_action_executed": executed if measured else None,
+    }
+
+
+def _mean(values: list[float]) -> float | None:
+    return round(sum(values) / len(values), 4) if values else None
+
+
+def platform_metrics(store: Store, platform=None) -> dict:
+    """影子与未见故障指标。没有观测时是不适用，禁止用 0 顶替。"""
+    with store.session() as session:
+        trials = session.scalars(select(TwinTrial)).all()
+        certs = session.scalars(select(TwinCertificate)).all()
+        searches = session.scalars(select(Record).where(Record.kind == "twin_search")).all()
+        trial_audits = session.scalars(select(Record).where(Record.kind == "twin_trial")).all()
+    skipped = [row for row in trials if row.skipped]
+    match_rates = [row.match_rate for row in certs if row.match_rate is not None]
+    predicted = [row for row in trial_audits if not (row.payload or {}).get("skipped")]
+    partial = sum(1 for row in predicted if not (row.payload or {}).get("would_resolve_signature"))
+    r_resolve = []
+    r_trials = []
+    for row in searches:
+        payload = row.payload or {}
+        candidates = payload.get("candidates") or []
+        r_trials.append(int(payload.get("tried") or 0))
+        if candidates:
+            r_resolve.append(1 if candidates[0].get("would_resolve_signature") else 0)
+    counts = store.recipe_counts()
+    unseen = store.unseen_summary()
+    twin_status = None
+    if platform is not None:
+        twin_status = (platform.environment().get("twin") or {}).get("status")
+    twin_available = None if twin_status is None else twin_status == "PASS"
+    return {
+        "twin_available": twin_available,
+        "twin_trials": len(trials) if trials else None,
+        "twin_skipped": len(skipped) if trials else None,
+        "twin_fidelity": _mean(match_rates),
+        "twin_partial_predictions": (
+            round(partial / len(predicted), 4) if predicted else None
+        ),
+        "r_arm_resolve_rate": _mean([float(v) for v in r_resolve]),
+        "r_arm_trials_avg": _mean([float(v) for v in r_trials]),
+        "unseen_n": unseen.get("unseen_n"),
+        "unseen_signature_recall": unseen.get("unseen_signature_recall"),
+        "unseen_signature_precision": unseen.get("unseen_signature_precision"),
+        "unseen_drift_excluded": unseen.get("unseen_drift_excluded"),
+        "holdout_size": counts.get("holdout_size"),
+        "recipe_pool_size": counts.get("recipe_pool_size"),
     }

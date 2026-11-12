@@ -173,6 +173,9 @@ def build_review(item: dict) -> dict:
             }
             for record in item.get("records", [])
         ],
+        "twin_trial": detail.get("twin_trial"),
+        "twin_certificate": detail.get("twin_certificate"),
+        "recipe_title": detail.get("recipe_title"),
         "generated_at": now(),
         "source": "incident_records",
     }
@@ -236,6 +239,34 @@ def render_review_markdown(review: dict) -> str:
     if not after:
         # 没复测就说没复测：空着会被读成「都健康」。
         lines.append("- 无复测采样（本次没有走到复测）")
+    certificate = review.get("twin_certificate") or {}
+    trial = review.get("twin_trial") or {}
+    lines.extend(["", "## 影子预测与证书", ""])
+    if trial.get("skipped"):
+        lines.append(f"- 影子不可用，本次没有反事实预测（{trial.get('reason') or 'skipped'}）。")
+    elif trial:
+        lines.append(
+            f"- 影子预测将变绿：{'、'.join(trial.get('predicted_pass') or []) or '无'}。"
+        )
+        lines.append(
+            f"- 影子预测仍红：{'、'.join(trial.get('predicted_still_fail') or []) or '无'}。"
+        )
+        if trial.get("would_resolve_signature"):
+            lines.append("- 影子预测：这次可以完全恢复。")
+        else:
+            lines.append("- 影子预测：这次还不能完全恢复。")
+    else:
+        lines.append("- 本次没有影子试修记录。")
+    if certificate:
+        lines.append(f"- 证书 match_rate：{certificate.get('match_rate')}")
+        surprise = certificate.get("surprise") or []
+        if surprise:
+            lines.append(f"- 与真环境不符的探针：{'、'.join(surprise)}")
+        else:
+            lines.append("- 预测与真环境复测一致。")
+    score = review.get("score_json") or (review.get("evaluation") or {}).get("score_json")
+    if isinstance(score, dict) and "weak" in str(score.get("parse") or ""):
+        lines.append("- 未见计分使用了弱解析（从摘要/evidence_ids 提取探针），不是模型填写的 failing_check_ids。")
     lines.extend(["", "## 未解决项", ""])
     unresolved = review.get("unresolved") or []
     if unresolved:
@@ -247,3 +278,34 @@ def render_review_markdown(review: dict) -> str:
         lines.append(f"- {record.get('created_at')} · {record.get('kind')} · {record.get('id')}")
     lines.append("")
     return "\n".join(lines)
+
+
+def render_talk_markdown(review: dict) -> str:
+    """三分钟现场词：由工单记录生成，不把 holdout 原语写进讲稿。"""
+    title = review.get("recipe_title") or review.get("scenario") or "编译器配方"
+    trial = review.get("twin_trial") or {}
+    certificate = review.get("twin_certificate") or {}
+    if trial.get("skipped"):
+        prediction = "影子不可用，本次没有反事实预测。"
+    elif trial.get("would_resolve_signature"):
+        prediction = "影子预测这次可以完全恢复。"
+    elif trial:
+        prediction = "影子预测这次还不能完全恢复。"
+    else:
+        prediction = "本次没有影子试修记录。"
+    match = certificate.get("match_rate")
+    if match is None:
+        cert_line = "还没有证书。"
+    else:
+        cert_line = f"证书 match_rate={match}。对不上记预测失败，复测仍以真环境为准。"
+    return "\n".join(
+        [
+            "# 三分钟现场词",
+            "",
+            "1. 打开 /compiler：池子里有一批哈希，holdout 被冻住，不要在演示里注入考题。",
+            f"2. 工作台注入「{title}」。四个容器里有的停、有的断网，探针红的不只一条。",
+            f"3. 诊断规划后先看影子：{prediction}批准后真环境复测与预测对照。{cert_line}",
+            "4. 打开评测「未见故障」：抽 holdout。模型上下文没有配方名。展示签名覆盖，不报虚高枚举正确率。",
+            "",
+        ]
+    )

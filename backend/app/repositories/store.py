@@ -3,6 +3,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -75,8 +76,48 @@ class EvaluationRun(Base):
     token_usage: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[str] = mapped_column(String)
     # standard：普通盲诊。adversarial：投毒样本。abstain：没有恢复动作的负例。
-    # 后两类不进入正确率分母。
+    # unseen：未见故障，按校准签名计分，不进旧正确率分母。
     cohort: Mapped[str] = mapped_column(String, default="standard")
+    recipe_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    signature_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    score_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class RecipeRow(Base):
+    __tablename__ = "recipes"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    canonical_hash: Mapped[str] = mapped_column(String, unique=True)
+    body_json: Mapped[dict] = mapped_column(JSON)
+    signature_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    holdout: Mapped[int] = mapped_column(Integer, default=0)
+    canonical_scene: Mapped[str | None] = mapped_column(String, nullable=True)
+    calibrated_at: Mapped[str | None] = mapped_column(String, nullable=True)
+    compiler_version: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class TwinTrial(Base):
+    __tablename__ = "twin_trials"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    incident_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    evaluation_run_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    recipe_id: Mapped[str] = mapped_column(String)
+    action_id: Mapped[str] = mapped_column(String)
+    before_json: Mapped[dict] = mapped_column(JSON)
+    after_json: Mapped[dict] = mapped_column(JSON)
+    skipped: Mapped[int] = mapped_column(Integer, default=0)
+    elapsed_ms: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[str] = mapped_column(String)
+
+
+class TwinCertificate(Base):
+    __tablename__ = "twin_certificates"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    incident_id: Mapped[str] = mapped_column(String)
+    trial_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    predicted_json: Mapped[dict] = mapped_column(JSON)
+    observed_json: Mapped[dict] = mapped_column(JSON)
+    match_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[str] = mapped_column(String)
 
 
 class EvaluationArm(Base):
@@ -207,8 +248,8 @@ def _finish_abstain(bucket: dict) -> dict:
     }
 
 
-SCHEMA_VERSION = 3
-SUPPORTED_SCHEMA_VERSIONS = {0, 1, 2, 3}
+SCHEMA_VERSION = 4
+SUPPORTED_SCHEMA_VERSIONS = {0, 1, 2, 3, 4}
 
 
 class Store:
@@ -238,6 +279,10 @@ class Store:
                 version = 2
             if version == 2:
                 self.migrate_2_to_3(connection)
+                connection.exec_driver_sql("PRAGMA user_version=3")
+                version = 3
+            if version == 3:
+                self.migrate_3_to_4(connection)
                 connection.exec_driver_sql(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     @staticmethod
@@ -261,6 +306,22 @@ class Store:
             connection.exec_driver_sql(
                 "ALTER TABLE evaluation_runs ADD COLUMN cohort TEXT NOT NULL DEFAULT 'standard'"
             )
+
+    @staticmethod
+    def migrate_3_to_4(connection) -> None:
+        """v3 → v4：配方表、影子试修/证书，以及评测可空列。只加不改破坏列。"""
+        RecipeRow.__table__.create(bind=connection, checkfirst=True)
+        TwinTrial.__table__.create(bind=connection, checkfirst=True)
+        TwinCertificate.__table__.create(bind=connection, checkfirst=True)
+        columns = {
+            row[1] for row in connection.exec_driver_sql("PRAGMA table_info(evaluation_runs)")
+        }
+        if "recipe_id" not in columns:
+            connection.exec_driver_sql("ALTER TABLE evaluation_runs ADD COLUMN recipe_id TEXT")
+        if "signature_json" not in columns:
+            connection.exec_driver_sql("ALTER TABLE evaluation_runs ADD COLUMN signature_json JSON")
+        if "score_json" not in columns:
+            connection.exec_driver_sql("ALTER TABLE evaluation_runs ADD COLUMN score_json JSON")
 
     def session(self) -> Session:
         return Session(self.engine, expire_on_commit=False)
@@ -312,7 +373,7 @@ class Store:
             ).all()
             return IncidentView(
                 id=item.id,
-                scenario_key=Scenario(item.scenario_key),
+                scenario_key=item.scenario_key,
                 mode=item.mode,
                 status=Status(item.status),
                 created_at=item.created_at,
@@ -474,6 +535,8 @@ class Store:
                     "truth_scenario": item.truth_scenario,
                     "correct": item.correct,
                     "rejected": item.rejected,
+                    "recipe_id": item.recipe_id,
+                    "score": item.score_json,
                 }
             )
         return row
@@ -535,7 +598,7 @@ class Store:
             if cohort == "abstain":
                 _accumulate_abstain(abstain, item)
                 continue
-            if cohort == "dual":
+            if cohort in {"dual", "unseen"}:
                 continue
             bucket = arms.setdefault(
                 item.arm,
@@ -688,5 +751,168 @@ class Store:
                 "分母只含快照内故障成立、且未超限的普通盲诊。对抗样本和负例不进入这个分母。",
                 "C 臂比 A/B 多一份视觉证据；其余输入与文本快照完全相同。",
                 "规则解释按探针与拓扑计算，不消耗 token，不记入模型调用。",
+                "未见故障按校准签名计分，不与 canonical 正确率合成一个总正确率。",
+                "未见计分优先用 failing_check_ids；缺失时弱解析，并在未见分表标明。",
+                "R 臂搜索结果默认不进入盲诊 prompt，也不进入规划上下文。",
             ],
         }
+
+    def unseen_summary(self) -> dict:
+        with self.session() as session:
+            items = session.scalars(
+                select(EvaluationRun).where(EvaluationRun.cohort == "unseen")
+            ).all()
+        n = 0
+        drift = 0
+        recalls: list[float] = []
+        precisions: list[float] = []
+        for item in items:
+            diagnosis = item.diagnosis_json or {}
+            if diagnosis.get("status") in {"BUDGET_EXCEEDED", "ERROR"}:
+                continue
+            score = item.score_json or {}
+            if score.get("reason") == "SIGNATURE_DRIFT" or score.get("excluded") and score.get("reason") == "SIGNATURE_DRIFT":
+                drift += 1
+                continue
+            if score.get("excluded"):
+                continue
+            n += 1
+            if isinstance(score.get("signature_recall"), (int, float)):
+                recalls.append(float(score["signature_recall"]))
+            if isinstance(score.get("signature_precision"), (int, float)):
+                precisions.append(float(score["signature_precision"]))
+        weak = sum(
+            1
+            for item in items
+            if "weak" in str((item.score_json or {}).get("parse") or "")
+            and (item.diagnosis_json or {}).get("status") not in {"BUDGET_EXCEEDED", "ERROR"}
+        )
+        note = (
+            "未见故障不与 canonical 正确率合成。漂移样本已剔除，不算模型答错。"
+            "计分优先用 failing_check_ids；没有该字段时从摘要弱解析，并在此标明。"
+        )
+        if weak:
+            note += f" 本批 {weak} 条为弱解析。"
+        return {
+            "unseen_n": n if items else None,
+            "unseen_signature_recall": round(sum(recalls) / len(recalls), 4) if recalls else None,
+            "unseen_signature_precision": (
+                round(sum(precisions) / len(precisions), 4) if precisions else None
+            ),
+            "unseen_drift_excluded": drift if items else None,
+            "unseen_weak_parse": weak if items else None,
+            "runs": len(items),
+            "note": note,
+        }
+
+    def upsert_recipe(self, recipe) -> None:
+        from app.services.compiler.schema import Recipe as RecipeModel
+
+        assert isinstance(recipe, RecipeModel)
+        with self.session() as session, session.begin():
+            row = session.get(RecipeRow, recipe.id)
+            payload = {
+                "canonical_hash": recipe.canonical_hash,
+                "body_json": recipe.model_dump(mode="json", exclude={"signature"}),
+                "signature_json": recipe.signature.model_dump(mode="json") if recipe.signature else None,
+                "holdout": int(bool(recipe.holdout)),
+                "canonical_scene": recipe.canonical_scene,
+                "calibrated_at": recipe.calibrated_at,
+                "compiler_version": recipe.compiler_version,
+            }
+            if row is None:
+                session.add(RecipeRow(id=recipe.id, **payload))
+            else:
+                for key, value in payload.items():
+                    setattr(row, key, value)
+
+    def get_recipe(self, recipe_id: str):
+        from app.services.compiler.schema import parse_recipe
+
+        with self.session() as session:
+            row = session.get(RecipeRow, recipe_id)
+            if row is None:
+                return None
+            data = dict(row.body_json or {})
+            data["id"] = row.id
+            data["canonical_hash"] = row.canonical_hash
+            data["holdout"] = bool(row.holdout)
+            data["calibrated_at"] = row.calibrated_at
+            data["compiler_version"] = row.compiler_version
+            if row.signature_json:
+                data["signature"] = row.signature_json
+            return parse_recipe(data)
+
+    def list_recipes(self, holdout: bool | None = None, limit: int = 100, offset: int = 0) -> list[dict]:
+        with self.session() as session:
+            query = select(RecipeRow).order_by(RecipeRow.id)
+            if holdout is True:
+                query = query.where(RecipeRow.holdout == 1)
+            elif holdout is False:
+                query = query.where(RecipeRow.holdout == 0)
+            rows = session.scalars(query.offset(offset).limit(limit)).all()
+            return [
+                {
+                    "id": row.id,
+                    "title": (row.body_json or {}).get("title"),
+                    "holdout": bool(row.holdout),
+                    "canonical_scene": row.canonical_scene,
+                    "calibrated_at": row.calibrated_at,
+                    "compiler_version": row.compiler_version,
+                }
+                for row in rows
+            ]
+
+    def recipe_counts(self) -> dict:
+        with self.session() as session:
+            rows = session.scalars(select(RecipeRow)).all()
+        calibrated = [row for row in rows if row.calibrated_at]
+        holdout_file = None
+        file_pool = None
+        try:
+            from app.services.compiler.split import load_calibrated, load_holdout
+
+            holdout_file = len(load_holdout().get("ids") or [])
+            file_pool = [
+                recipe
+                for recipe in load_calibrated()
+                if recipe.signature
+                and recipe.signature.source == "calibrated"
+                and recipe.signature.failing_checks
+            ]
+        except DomainError:
+            holdout_file = None
+        holdout_rows = sum(1 for row in rows if row.holdout)
+        enumerated = None
+        try:
+            from app.services.compiler.split import enumerated_size
+
+            enumerated = enumerated_size()
+        except DomainError:
+            enumerated = None
+        return {
+            "recipe_pool_size": len(file_pool) if file_pool else (len(calibrated) if calibrated else None),
+            "holdout_size": holdout_file if holdout_file is not None else (
+                holdout_rows if rows else None
+            ),
+            "enumerated_size": enumerated,
+            "total_rows": len(rows),
+        }
+
+    def list_twin_trials(self, limit: int = 50) -> list[dict]:
+        with self.session() as session:
+            rows = session.scalars(
+                select(TwinTrial).order_by(TwinTrial.created_at.desc()).limit(limit)
+            ).all()
+            return [
+                {
+                    "id": row.id,
+                    "incident_id": row.incident_id,
+                    "recipe_id": row.recipe_id,
+                    "action_id": row.action_id,
+                    "skipped": bool(row.skipped),
+                    "elapsed_ms": row.elapsed_ms,
+                    "created_at": row.created_at,
+                }
+                for row in rows
+            ]

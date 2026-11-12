@@ -11,7 +11,9 @@ from langgraph.types import interrupt
 
 from app.agents.evidence import (
     EvidenceAgent,
+    any_failing,
     observations_available,
+    observations_present,
     remaining_fault,
     validate_evidence_integrity,
     validate_execution_preconditions,
@@ -25,11 +27,13 @@ from app.schemas.domain import (
     Diagnosis,
     Evidence,
     Plan,
+    Probe,
     Scenario,
     Status,
     Verdict,
     new_id,
     now,
+    try_scenario,
 )
 from app.services.adversarial import apply_poison
 from app.services.executor import ActionExecutor, validate_plan
@@ -81,11 +85,13 @@ class Workflow:
         probes: Probes,
         checkpointer: BaseCheckpointSaver,
         settings: Settings | None = None,
+        twin=None,
     ) -> None:
         self.store, self.evidence_agent = store, evidence_agent
         self.diagnosis, self.planner = diagnosis, planner
         self.executor, self.probes = executor, probes
         self.settings = settings or evidence_agent.settings
+        self.twin = twin
         builder = StateGraph(IncidentState)
         for name, node in (
             ("collect", self.collect),
@@ -201,16 +207,27 @@ class Workflow:
 
     def collect(self, state: IncidentState):
         def operation():
-            scenario = Scenario(state.get("scenario_key", "MYSQL_DOWN"))
+            scenario = try_scenario(state.get("scenario_key"))
             with self.store.session() as session:
                 poisoned = bool(
                     self.store.require(session, state["incident_id"]).detail.get("poison")
                 )
-            items = self.evidence_agent.collect(
-                scenario,
-                attachments=self.attachments_of(state),
-            )
-            if poisoned:
+            if scenario is None:
+                items = self.evidence_agent.collect_domain()
+                attachments = self.attachments_of(state)
+                if attachments:
+                    observed = [
+                        Probe.model_validate(item.raw) for item in items if item.kind == "probe"
+                    ]
+                    items.extend(
+                        EvidenceAgent.attachment_evidence(item, observed) for item in attachments
+                    )
+            else:
+                items = self.evidence_agent.collect(
+                    scenario,
+                    attachments=self.attachments_of(state),
+                )
+            if poisoned and scenario is not None:
                 items = apply_poison(items, scenario)
             with self.store.session() as session, session.begin():
                 for item in items:
@@ -238,9 +255,14 @@ class Workflow:
             return "diagnose"
         # 第二轮容器可能已运行；仍需把失败业务探针交给诊断，再校验根因是否支持动作。
         collected = [Evidence.model_validate(e) for e in state["evidence"]]
-        scenario = Scenario(state.get("scenario_key", "MYSQL_DOWN"))
+        scenario = try_scenario(state.get("scenario_key"))
         # 观测还不完整时，只要该场景的故障已经被探针证实，就继续诊断，不在采证处停住。
-        if observations_available(collected, scenario) or remaining_fault(collected, scenario):
+        ready = (
+            observations_present(collected) or any_failing(collected)
+            if scenario is None
+            else observations_available(collected, scenario) or remaining_fault(collected, scenario)
+        )
+        if ready:
             return "diagnose"
         if state["collect_count"] < 2:
             return "collect"
@@ -269,11 +291,16 @@ class Workflow:
                         "attachment_recheck_pending": True,
                     }
                 collected = [Evidence.model_validate(item) for item in state["evidence"]]
-                scenario = Scenario(state.get("scenario_key", "MYSQL_DOWN"))
-                if not remaining_fault(collected, scenario):
+                scenario = try_scenario(state.get("scenario_key"))
+                still_fault = (
+                    any_failing(collected)
+                    if scenario is None
+                    else remaining_fault(collected, scenario)
+                )
+                if not still_fault:
                     raise DomainError("EVIDENCE_CONFLICT", conflict)
             collected = [Evidence.model_validate(e) for e in state["evidence"]]
-            scenario = Scenario(state.get("scenario_key", "MYSQL_DOWN"))
+            scenario = try_scenario(state.get("scenario_key")) or Scenario.MYSQL_DOWN
             context = {
                 "incident_id": state["incident_id"],
                 "scenario_key": state.get("scenario_key", "MYSQL_DOWN"),
@@ -319,7 +346,11 @@ class Workflow:
                     "model_attempts": attempt,
                     "attachment_recheck_pending": False,
                 }
-            fallback = registered_diagnosis(collected, scenario)
+            fallback = (
+                None
+                if try_scenario(state.get("scenario_key")) is None
+                else registered_diagnosis(collected, scenario)
+            )
             if fallback is None or last_error is None:
                 raise last_error or DomainError("AI_UNAVAILABLE", "诊断没有可用结论", 503)
             payload = fallback.model_dump(mode="json")
@@ -446,7 +477,7 @@ class Workflow:
             return 0.0
 
     def accept_plan(self, state, result: Plan, source: str, attempts: int) -> dict:
-        scenario = Scenario(state.get("scenario_key", "MYSQL_DOWN"))
+        scenario = try_scenario(state.get("scenario_key")) or Scenario.MYSQL_DOWN
         plan_id = new_id("plan")
         payload = result.model_dump(mode="json")
         # 先留痕再校验：被白名单门禁拦下的非法提议也必须计数。
@@ -458,13 +489,24 @@ class Workflow:
                 {"plan_id": plan_id, "attempt": state["attempt"], "source": source, **payload},
             )
         validate_plan(result, scenario)
+        recipe = self._incident_recipe(state)
+        if try_scenario(state.get("scenario_key")) is None:
+            collected = [Evidence.model_validate(item) for item in state.get("evidence") or []]
+            if any_failing(collected) and result.action_id == "NO_ACTION":
+                raise DomainError("BLOCKED", "探针仍失败时不能对编译器配方选择 NO_ACTION")
+        preferred = list(recipe.preferred_actions) if recipe else []
+        canonical = (
+            result.action_id in preferred
+            if try_scenario(state.get("scenario_key")) is None
+            else result.action_id == SCENARIOS[scenario].action
+        )
         self.phase(
             state,
             Status.WAITING_APPROVAL,
             plan=payload,
             plan_id=plan_id,
             plan_source=source,
-            plan_canonical=result.action_id == SCENARIOS[scenario].action,
+            plan_canonical=canonical,
             model_attempts=attempts,
         )
         with self.store.session() as session, session.begin():
@@ -478,11 +520,14 @@ class Workflow:
 
     def plan(self, state):
         def operation():
-            scenario = Scenario(state.get("scenario_key", "MYSQL_DOWN"))
+            scenario = try_scenario(state.get("scenario_key"))
             collected = [Evidence.model_validate(item) for item in state["evidence"]]
             # 截图不能决定恢复。探针没有证实故障时才停；故障已证实就继续修。
             conflict = self.attachment_conflict(state)
-            if conflict and not remaining_fault(collected, scenario):
+            still_fault = (
+                any_failing(collected) if scenario is None else remaining_fault(collected, scenario)
+            )
+            if conflict and not still_fault:
                 raise DomainError("EVIDENCE_CONFLICT", conflict)
             context = {
                 "diagnosis": state["diagnosis"],
@@ -491,6 +536,13 @@ class Workflow:
                 "previous_verification": state.get("verification"),
                 "previous_execution": state.get("execution"),
             }
+            if self.settings.r_arm_planner_context:
+                recipe = self._incident_recipe(state)
+                if recipe is not None:
+                    context["twin_observation"] = {
+                        "note": "影子世界观测，默认关闭以免污染对照",
+                        "preferred_actions": list(recipe.preferred_actions),
+                    }
             feedback = None
             last_error: DomainError | None = None
             for attempt in range(1, PLAN_ATTEMPTS + 1):
@@ -507,11 +559,23 @@ class Workflow:
                 except DomainError as error:
                     last_error = error
                     feedback = repair_feedback(error)
-            fallback = (
-                registered_plan(scenario, collected)
-                if probes_support_registered_fix(collected, scenario)
-                else None
-            )
+            fallback = None
+            if scenario is not None and probes_support_registered_fix(collected, scenario):
+                fallback = registered_plan(scenario, collected)
+            elif scenario is None:
+                recipe = self._incident_recipe(state)
+                from app.services.action_catalog import lookup
+
+                action_id = (recipe.preferred_actions or [None])[0] if recipe else None
+                entry = lookup(action_id) if action_id else None
+                if entry is not None:
+                    fallback = Plan(
+                        action_id=entry.action_id,
+                        target=entry.target,
+                        reason="模型给出的计划不能执行。探针仍显示故障，改为配方优先恢复动作，批准后才会执行。",
+                        risk="LOW",
+                        expected_checks=list(CHECK_IDS[:2]),
+                    )
             if fallback is None or last_error is None:
                 raise last_error or DomainError("AI_UNAVAILABLE", "规划没有可用结论", 503)
             note = "模型给出的计划不能执行。已改为该场景已注册的恢复动作，批准后才会执行。"
@@ -545,11 +609,15 @@ class Workflow:
 
         def operation():
             collected = [Evidence.model_validate(e) for e in state["evidence"]]
-            scenario = Scenario(state.get("scenario_key", "MYSQL_DOWN"))
+            scenario = try_scenario(state.get("scenario_key"))
             explanation = explain_from_evidence(collected)
             rule_ms = int(explanation.get("rule_ms") or 0)
             diagnosis = Diagnosis.model_validate(state["diagnosis"])
-            confirmed = remaining_fault(collected, scenario)
+            confirmed = (
+                any_failing(collected)
+                if scenario is None
+                else remaining_fault(collected, scenario)
+            )
             self.phase(
                 state,
                 Status.DIAGNOSING,
@@ -582,7 +650,13 @@ class Workflow:
                     details={"topology_explanation": explanation, "rule_ms": rule_ms},
                 )
             try:
-                validate_execution_preconditions(diagnosis, collected, scenario)
+                if scenario is None:
+                    if not diagnosis.evidence_sufficient or not confirmed:
+                        raise DomainError(
+                            "EVIDENCE_INSUFFICIENT", "根因与实测证据不足以支持恢复操作"
+                        )
+                else:
+                    validate_execution_preconditions(diagnosis, collected, scenario)
             except DomainError:
                 if confirmed:
                     return self.continue_repair(state, explanation, rule_ms)
@@ -606,10 +680,79 @@ class Workflow:
                 return note
         return None
 
+    def _incident_recipe(self, state):
+        from app.services.compiler.canonical import canonical_recipe
+        from app.services.compiler.schema import parse_recipe
+
+        with self.store.session() as session:
+            item = self.store.require(session, state["incident_id"])
+            detail = item.detail or {}
+            if detail.get("recipe"):
+                try:
+                    return parse_recipe(detail["recipe"])
+                except DomainError:
+                    pass
+            key = state.get("scenario_key") or item.scenario_key
+            try:
+                return canonical_recipe(Scenario(key))
+            except ValueError:
+                return None
+
+    def _run_twin_trial(self, state) -> dict:
+        plan = state.get("plan") or {}
+        action_id = plan.get("action_id") or ""
+        recipe = self._incident_recipe(state)
+        skipped = {
+            "world": "twin",
+            "action_id": action_id,
+            "skipped": True,
+            "recipe_id": recipe.id if recipe else None,
+        }
+        if self.twin is None:
+            skipped["reason"] = "TWIN_UNAVAILABLE"
+            return skipped
+        status = self.twin.status()
+        if status.get("status") == "UNKNOWN":
+            skipped["reason"] = "TWIN_UNAVAILABLE"
+            return skipped
+        if not recipe:
+            skipped["reason"] = "RECIPE_INVALID"
+            return skipped
+        try:
+            return self.twin.trial(recipe, action_id, incident_id=state["incident_id"])
+        except DomainError as error:
+            skipped["reason"] = error.code
+            return skipped
+
     def approval(self, state):
+        # 批准前在影子里试修：人仍然只批准真环境那一次。
+        # 恢复本节点时不得再跑一遍试修（interrupt 之后节点会从头执行）。
+        with self.store.session() as session:
+            item = self.store.require(session, state["incident_id"])
+            existing = (item.detail or {}).get("twin_trial")
+            existing_attempt = (item.detail or {}).get("twin_trial_attempt")
+        if existing is not None and existing_attempt == state.get("attempt"):
+            trial = existing
+        else:
+            trial = self._run_twin_trial(state)
+            with self.store.session() as session, session.begin():
+                item = self.store.require(session, state["incident_id"])
+                self.store.update(
+                    session,
+                    item,
+                    Status.WAITING_APPROVAL,
+                    twin_trial=trial,
+                    twin_trial_attempt=state.get("attempt"),
+                )
+                self.store.audit(session, state["incident_id"], "twin_trial", trial)
         # 恢复时会重放本节点；中断之前没有写入或外部副作用。
         response = interrupt(
-            {"plan_id": state["plan_id"], "plan": state["plan"], "attempt": state["attempt"]}
+            {
+                "plan_id": state["plan_id"],
+                "plan": state["plan"],
+                "attempt": state["attempt"],
+                "twin_trial": trial,
+            }
         )
         if response.get("plan_id") != state["plan_id"]:
             raise DomainError("BLOCKED", "审批对应计划不匹配")
@@ -658,18 +801,55 @@ class Workflow:
                         },
                     )
 
-            result = self.probes.verify(
-                on_sample, Scenario(state.get("scenario_key", "MYSQL_DOWN"))
-            ).model_dump(mode="json")
+            scenario = try_scenario(state.get("scenario_key"))
+            if scenario is None:
+                sample = self.probes.baseline()
+                on_sample(sample)
+                verdict = (
+                    Verdict.PASS
+                    if sample and all(probe.verdict == Verdict.PASS for probe in sample)
+                    else Verdict.FAIL
+                )
+                from app.schemas.domain import Verification
+
+                result = Verification(verdict=verdict, samples=[sample]).model_dump(mode="json")
+            else:
+                result = self.probes.verify(on_sample, scenario).model_dump(mode="json")
+            certificate = None
             with self.store.session() as session, session.begin():
+                item = self.store.require(session, state["incident_id"])
+                trial = (item.detail or {}).get("twin_trial") or {}
+                if trial and not trial.get("skipped") and self.twin is not None:
+                    observed = self.probes.baseline()
+                    certificate = self.twin.certificate(trial, observed)
+                    from app.repositories.store import TwinCertificate
+                    from app.schemas.domain import new_id
+
+                    session.add(
+                        TwinCertificate(
+                            id=new_id("cert"),
+                            incident_id=state["incident_id"],
+                            trial_id=trial.get("id"),
+                            predicted_json=certificate.get("predicted") or {},
+                            observed_json=certificate.get("observed") or {},
+                            match_rate=certificate.get("match_rate"),
+                            created_at=now(),
+                        )
+                    )
+                    self.store.audit(
+                        session, state["incident_id"], "twin_certificate", certificate
+                    )
                 self.store.audit(
                     session,
                     state["incident_id"],
                     "verification",
                     {"attempt": state["attempt"], **result},
                 )
-            self.phase(state, Status.VERIFYING, verification=result)
-            return {"verification": result}
+            extra = {"verification": result}
+            if certificate:
+                extra["twin_certificate"] = certificate
+            self.phase(state, Status.VERIFYING, **extra)
+            return extra
 
         return self.guarded(state, Status.VERIFYING, operation)
 

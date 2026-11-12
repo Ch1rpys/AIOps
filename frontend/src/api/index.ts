@@ -10,9 +10,13 @@ import type {
   Health,
   Incident,
   IncidentSummary,
+  RecipeSummary,
   Scenario,
   ScenarioKey,
   Status,
+  TwinStatus,
+  TwinSearchResult,
+  TwinTrial,
 } from '../types';
 
 async function request<T>(
@@ -21,6 +25,7 @@ async function request<T>(
   body?: unknown,
   key?: string,
   admin = false,
+  timeoutMs = 45_000,
 ): Promise<T> {
   const headers: Record<string, string> = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -33,7 +38,7 @@ async function request<T>(
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(45_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.headers.get('content-type')?.includes('application/json')) {
       throw new Error(`服务未返回有效数据（HTTP ${response.status}），请检查后端连接。`);
@@ -132,25 +137,87 @@ export const api = {
       evaluationView,
     ),
   triggerEvaluation: (
-    scenario: ScenarioKey,
+    scenario: ScenarioKey | null,
     arms: EvaluationArm[],
     key: string,
     attachmentIds: string[] = [],
-    cohort: 'standard' | 'adversarial' = 'standard',
+    cohort: 'standard' | 'adversarial' | 'unseen' = 'standard',
+    recipeId?: string,
   ) =>
     request<{
       accepted: boolean;
-      scenario: string;
+      scenario: string | null;
       arms: EvaluationArm[];
       cohort: string;
       status: string;
     }>(
       '/evaluation/runs',
       'POST',
-      { scenario, arms, confirm: true, attachment_ids: attachmentIds, cohort },
+      {
+        scenario: scenario ?? undefined,
+        arms,
+        confirm: true,
+        attachment_ids: attachmentIds,
+        cohort,
+        recipe_id: recipeId,
+      },
       key,
       true,
     ),
+  compileInject: (key: string, recipeId?: string) =>
+    request<{ incident_id: string; recipe_id: string; recipe_title: string }>(
+      '/scenarios/compile/inject',
+      'POST',
+      recipeId ? { confirm: true, recipe_id: recipeId } : { confirm: true, random: 'seen' },
+      key,
+      true,
+    ),
+  worlds: () => request<{ primary: TwinStatus; twin: TwinStatus }>('/worlds'),
+  worldLogs: (world: 'primary' | 'twin', service: string) =>
+    request<{ world: string; service: string; text: string }>(
+      `/worlds/${world}/logs/${encodeURIComponent(service)}`,
+    ),
+  compilerRecipes: (view?: 'seen' | 'holdout') => {
+    const query = new URLSearchParams();
+    if (view) query.set('view', view);
+    return request<{
+      recipes: RecipeSummary[];
+      recipe_pool_size: number | null;
+      holdout_size: number | null;
+      enumerated_size: number | null;
+      total_rows: number;
+    }>(`/compiler/recipes?${query}`, 'GET', undefined, undefined, view === 'holdout');
+  },
+  compilerRecipe: (id: string) =>
+    request<Record<string, unknown>>(`/compiler/recipes/${encodeURIComponent(id)}`),
+  compilerCalibrate: (key: string, recipeId: string) =>
+    request(
+      `/compiler/calibrate?recipe_id=${encodeURIComponent(recipeId)}`,
+      'POST',
+      undefined,
+      key,
+      true,
+    ),
+  twinEnsure: (key: string) => request('/twin/ensure', 'POST', undefined, key, true),
+  twinReset: (key: string) => request('/twin/reset', 'POST', undefined, key, true),
+  twinTrials: () => request<{ trials: TwinTrial[] }>('/twin/trials'),
+  twinSearch: (key: string, recipeId: string, limit = 5) =>
+    request<TwinSearchResult>(
+      `/twin/search?recipe_id=${encodeURIComponent(recipeId)}&limit=${limit}`,
+      'POST',
+      undefined,
+      key,
+      true,
+      180_000,
+    ),
+  unseenSummary: () =>
+    request<{
+      unseen_n: number | null;
+      unseen_signature_recall: number | null;
+      unseen_signature_precision: number | null;
+      unseen_drift_excluded: number | null;
+      note?: string;
+    }>('/evaluation/unseen/summary'),
   uploadEvaluationAttachment: (filename: string, contentBase64: string, note = '') =>
     request<{
       id: string;

@@ -106,16 +106,26 @@ def runtime_checks(target: str, node: dict, docker: dict, endpoint: str) -> list
     return checks
 
 
+def dockerfile_base(relative: str, name: str) -> str:
+    dockerfile = (ROOT / relative).read_text(encoding="utf-8")
+    base = re.findall(r"^FROM\s+(\S+)\s*$", dockerfile, re.MULTILINE)
+    if len(base) != 1:
+        raise CheckError(f"{name}: expected one native Dockerfile base image")
+    return base[0]
+
+
 def image_references(compose: dict) -> dict[str, str]:
     services = compose.get("services", {})
     if set(services) != set(SERVICES):
         raise CheckError("compose: unexpected service set")
-    images = {name: item["image"] for name, item in services.items() if "image" in item}
-    dockerfile = (ROOT / "demo/demo-app/Dockerfile").read_text(encoding="utf-8")
-    base = re.findall(r"^FROM\s+(\S+)\s*$", dockerfile, re.MULTILINE)
-    if len(base) != 1:
-        raise CheckError("demo-app: expected one native Dockerfile base image")
-    images["demo-app-base"] = base[0]
+    images = {}
+    for name, item in services.items():
+        image = item.get("image")
+        if image and not str(image).startswith("aiops-demo"):
+            images[name] = image
+    images["demo-redis"] = dockerfile_base("demo/images/redis/Dockerfile", "demo-redis")
+    images["demo-nginx"] = dockerfile_base("demo/images/nginx/Dockerfile", "demo-nginx")
+    images["demo-app-base"] = dockerfile_base("demo/demo-app/Dockerfile", "demo-app")
     return images
 
 

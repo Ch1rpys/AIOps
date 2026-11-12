@@ -12,6 +12,8 @@ from app.schemas.domain import Verdict
 
 def lab_baseline(docker: DockerController, probes: Probes) -> dict:
     """容器状态快照 + 基线探针，并给出整体健康判定。"""
+    world = getattr(docker, "world", None)
+    project = getattr(world, "project", COMPOSE_PROJECT)
     states, error = {}, None
     try:
         states = docker.snapshot()
@@ -23,14 +25,15 @@ def lab_baseline(docker: DockerController, probes: Probes) -> dict:
         and all(
             states.get(s, {}).get("state") == "running"
             and states[s].get("health") == "healthy"
-            and states[s].get("project") == COMPOSE_PROJECT
+            and states[s].get("project") == project
             for s in SERVICES
         )
         and all(p.verdict == Verdict.PASS for p in checks)
     )
     return {
         "healthy": healthy,
-        "compose_project": COMPOSE_PROJECT,
+        "compose_project": project,
+        "world": getattr(world, "name", "primary"),
         "services": states,
         "probes": [p.model_dump(mode="json") for p in checks],
         "error": error,

@@ -9,6 +9,7 @@ import redis
 from app.config import CHECK_IDS, Settings
 from app.scenarios import SCENARIOS
 from app.schemas.domain import Probe, Scenario, Verdict, Verification
+from app.worlds import World, world_from_settings
 
 
 def judge(probes: list[Probe], scenario: Scenario = Scenario.MYSQL_DOWN) -> Verdict:
@@ -23,9 +24,10 @@ def judge(probes: list[Probe], scenario: Scenario = Scenario.MYSQL_DOWN) -> Verd
 
 
 class Probes:
-    def __init__(self, settings: Settings, client: httpx.Client):
+    def __init__(self, settings: Settings, client: httpx.Client, world: World | None = None):
         self.settings = settings
         self.client = client
+        self.world = world or world_from_settings(settings, "primary")
 
     def sql(self) -> Probe:
         if not self.settings.demo_mysql_password.get_secret_value():
@@ -36,8 +38,8 @@ class Probes:
             )
         try:
             with pymysql.connect(
-                host=self.settings.mysql_host,
-                port=self.settings.mysql_port,
+            host=self.settings.mysql_host,
+            port=self.world.mysql_port,
                 user=self.settings.mysql_user,
                 password=self.settings.demo_mysql_password.get_secret_value(),
                 database="demo",
@@ -97,31 +99,31 @@ class Probes:
             return self.sql()
         if name == "app_db_check":
             return self.http(
-                "app_db_check", self.settings.app_url + "/db-check", {"status": "ok", "value": 1}
+                "app_db_check", self.world.app_url + "/db-check", {"status": "ok", "value": 1}
             )
         if name == "redis_roundtrip":
             return self.redis_roundtrip()
         if name == "app_cache_check":
             return self.http(
                 "app_cache_check",
-                self.settings.app_url + "/cache-check",
+                self.world.app_url + "/cache-check",
                 {"status": "ok", "value": "probe"},
             )
         if name == "nginx_hello":
             return self.http(
                 "nginx_hello",
-                self.settings.nginx_url + "/api/hello",
+                self.world.nginx_url + "/api/hello",
                 {"message": "hello from demo-app"},
             )
         if name == "app_health":
-            return self.http("app_health", self.settings.app_url + "/health", {"status": "ok"})
+            return self.http("app_health", self.world.app_url + "/health", {"status": "ok"})
         raise ValueError(f"未注册的检查 ID：{name}")
 
     def redis_roundtrip(self) -> Probe:
         try:
             with redis.Redis(
-                host="127.0.0.1",
-                port=self.settings.redis_port,
+            host="127.0.0.1",
+            port=self.world.redis_port,
                 socket_connect_timeout=self.settings.probe_timeout,
                 socket_timeout=self.settings.probe_timeout,
             ) as connection:

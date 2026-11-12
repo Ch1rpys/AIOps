@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "id": "rec_0e201352d0e5",
+  "title": "代理探针失败",
+  "primitives": [
+    {
+      "kind": "nginx_upstream",
+      "profile": "misdirected"
+    }
+  ],
+  "recoverable": true,
+  "negative": false,
+  "poison": false,
+  "canonical_scene": "NGINX_UPSTREAM",
+  "preferred_actions": [
+    "RESTORE_NGINX_UPSTREAM"
+  ],
+  "canonical_hash": "0e201352d0e55c7d57cd9bb83f4077b9dc917bda6c66b944c77ae7eaaf0de7ff",
+  "holdout": false,
+  "compiler_version": 1,
+  "dirty": false,
+  "unsupported": false
+}

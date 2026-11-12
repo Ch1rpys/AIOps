@@ -11,6 +11,7 @@ from app.scenarios import SCENARIOS
 from app.schemas.domain import (
     ApprovalRequest,
     AttachmentRequest,
+    CompileInjectRequest,
     Confirmation,
     EvaluationRequest,
     IncidentView,
@@ -18,7 +19,7 @@ from app.schemas.domain import (
     Status,
 )
 from app.services.action_catalog import CATALOG
-from app.services.metrics import adversarial_closed_loop, end_to_end_summary
+from app.services.metrics import adversarial_closed_loop, end_to_end_summary, platform_metrics
 from app.services.review import build_review, incident_impact_graph, render_review_markdown
 
 router = APIRouter(prefix="/api")
@@ -88,6 +89,15 @@ def scenarios():
         }
         for key, definition in SCENARIOS.items()
     ]
+
+
+@router.post("/scenarios/compile/inject", dependencies=admin, status_code=201)
+def compile_inject(body: CompileInjectRequest, key: Key, service=Depends(platform)):
+    if body.random == "seen" or not body.recipe_id:
+        recipe = service.pick_seen_recipe()
+    else:
+        recipe = service.load_recipe(body.recipe_id, for_lab=True)
+    return service.inject_recipe(recipe, key)
 
 
 @router.post("/scenarios/{scenario}/inject", dependencies=admin, status_code=201)
@@ -238,6 +248,17 @@ def report_markdown(incident_id: str, service=Depends(platform)):
     )
 
 
+@router.get("/incidents/{incident_id}/talk.md", response_class=PlainTextResponse)
+def talk_markdown(incident_id: str, service=Depends(platform)):
+    from app.services.review import render_talk_markdown
+
+    content = render_talk_markdown(build_review(service.store.view(incident_id)))
+    return PlainTextResponse(
+        content,
+        headers={"Content-Disposition": f'attachment; filename="{incident_id}-talk.md"'},
+    )
+
+
 # ---- 盲诊评测（独立路由，不进工作台）----------------------------------------
 # 真值只在 evaluation_runs.truth_scenario 一处，由评测服务读写。
 # 默认返回体一律不含真值与判卷结果；只有显式的评测视图才带出来。
@@ -251,10 +272,12 @@ def evaluation_view(request: Request) -> bool:
     return True
 
 
-def run_evaluation_safely(service, scenario, arms, attachment_ids=None, cohort="standard") -> None:
+def run_evaluation_safely(
+    service, scenario, arms, attachment_ids=None, cohort="standard", recipe_id=None
+) -> None:
     """后台执行评测：异常只记录，不让后台任务把响应周期搞崩。"""
     try:
-        service.run_experiment(scenario, arms, attachment_ids or [], cohort)
+        service.run_experiment(scenario, arms, attachment_ids or [], cohort, recipe_id)
     except DomainError as error:
         # 不打印场景：真值不进日志（§4.1）。
         logger.error("evaluation_failed code=%s", error.code)
@@ -297,6 +320,9 @@ def create_evaluation_run(
     service=Depends(evaluation),
     platform_service=Depends(platform),
 ):
+    if body.cohort == "unseen":
+        # 抽题错误要在排队前返回，不能吞进后台任务。
+        service._pick_holdout(body.recipe_id)
     if "C" in body.arms and not body.attachment_ids:
         # C 臂没有视觉证据就退化成 B 臂：那是假对照，明确拒绝而不是降级伪装。
         raise DomainError(
@@ -310,8 +336,8 @@ def create_evaluation_run(
     if body.cohort == "adversarial" and "L" not in arms:
         arms.append("L")
     fingerprint = (
-        f"{body.cohort}:{body.scenario.value}:{','.join(arms)}:"
-        f"{','.join(sorted(body.attachment_ids))}"
+        f"{body.cohort}:{(body.scenario.value if body.scenario else body.recipe_id or 'holdout')}:"
+        f"{','.join(arms)}:{','.join(sorted(body.attachment_ids))}"
     )
     with platform_service.store.session() as session:
         previous = platform_service.store.receipt(session, key, scope, fingerprint)
@@ -323,7 +349,7 @@ def create_evaluation_run(
             raise DomainError("LAB_BUSY", "工作台实验进行中，请先完成或重置当前实验后再评测", 409)
     response = {
         "accepted": True,
-        "scenario": body.scenario.value,
+        "scenario": body.scenario.value if body.scenario else None,
         "arms": arms,
         "cohort": body.cohort,
         "status": "QUEUED",
@@ -331,7 +357,13 @@ def create_evaluation_run(
     with platform_service.store.session() as session, session.begin():
         platform_service.store.save_receipt(session, key, scope, fingerprint, response)
     tasks.add_task(
-        run_evaluation_safely, service, body.scenario, arms, body.attachment_ids, body.cohort
+        run_evaluation_safely,
+        service,
+        body.scenario,
+        arms,
+        body.attachment_ids,
+        body.cohort,
+        body.recipe_id,
     )
     return response
 
@@ -349,7 +381,7 @@ def list_evaluation_runs(
 
 
 @router.get("/evaluation/summary")
-def evaluation_summary(service=Depends(evaluation)):
+def evaluation_summary(service=Depends(evaluation), platform_service=Depends(platform)):
     """纯诊断对照与端到端对照的指标分开呈现，不混为一谈。"""
     summary = service.store.evaluation_summary()
     end_to_end = end_to_end_summary(service.store)
@@ -369,6 +401,12 @@ def evaluation_summary(service=Depends(evaluation)):
             "非法动作执行次数见对抗样本一节，不在这里记成 0。"
         )
     summary["end_to_end"] = end_to_end
+    summary["unseen"] = service.store.unseen_summary()
+    summary["platform"] = platform_metrics(service.store, platform_service)
+    notes = list(summary.get("notes") or [])
+    if platform_service.settings.r_arm_planner_context:
+        notes.append("R 臂搜索结果已进入规划上下文，本对照已注明污染。")
+    summary["notes"] = notes
     return summary
 
 
@@ -376,3 +414,160 @@ def evaluation_summary(service=Depends(evaluation)):
 def evaluation_run(run_id: str, request: Request, service=Depends(evaluation)):
     reveal = evaluation_view(request)
     return service.store.evaluation_run(run_id, reveal)
+
+
+@router.get("/evaluation/unseen/summary")
+def unseen_summary(service=Depends(evaluation)):
+    summary = service.store.unseen_summary()
+    # 无令牌摘要不含配方原语与签名。
+    return {key: value for key, value in summary.items() if key != "ids"}
+
+
+@router.get("/worlds")
+def worlds(service=Depends(platform)):
+    return service.worlds()
+
+
+@router.get("/worlds/{name}/logs/{service}")
+def world_logs(name: str, service: str, platform_service=Depends(platform)):
+    if name not in {"primary", "twin"}:
+        raise DomainError("BLOCKED", "世界名只能是 primary 或 twin", 404)
+    return platform_service.service_logs(service, name)
+
+
+@router.get("/twin/trials")
+def twin_trials(service=Depends(platform)):
+    return {"trials": service.store.list_twin_trials()}
+
+
+@router.post("/twin/ensure", dependencies=admin)
+def twin_ensure(key: Key, service=Depends(platform)):
+    if service.twin is None:
+        raise DomainError("TWIN_UNAVAILABLE", "影子世界未配置", 503)
+    return service.twin.ensure()
+
+
+@router.post("/twin/reset", dependencies=admin)
+def twin_reset(key: Key, service=Depends(platform)):
+    if service.twin is None:
+        raise DomainError("TWIN_UNAVAILABLE", "影子世界未配置", 503)
+    with service.twin.lock():
+        outputs = service.twin.reset_clean()
+    return {"status": "PASS" if service.twin.baseline() else "FAIL", "outputs": outputs}
+
+
+@router.post("/twin/trial", dependencies=admin)
+def twin_trial(incident_id: str, key: Key, service=Depends(platform)):
+    if service.twin is None:
+        raise DomainError("TWIN_UNAVAILABLE", "影子世界未配置", 503)
+    item = service.store.view(incident_id)
+    plan = (item.get("detail") or {}).get("plan") or {}
+    recipe = None
+    if (item.get("detail") or {}).get("recipe"):
+        from app.services.compiler.schema import parse_recipe
+
+        recipe = parse_recipe(item["detail"]["recipe"])
+    if recipe is None:
+        raise DomainError("RECIPE_INVALID", "工单没有配方，无法试修", 409)
+    return service.twin.trial(recipe, plan.get("action_id") or "NO_ACTION", incident_id=incident_id)
+
+
+@router.post("/twin/search", dependencies=admin)
+def twin_search(
+    recipe_id: str,
+    key: Key,
+    service=Depends(platform),
+    limit: int | None = Query(None, ge=1, le=80),
+):
+    from app.services.twin_search import search
+
+    if service.twin is None:
+        raise DomainError("TWIN_UNAVAILABLE", "影子世界未配置", 503)
+    recipe = service.load_recipe(recipe_id, for_lab=True)
+    return search(service.twin, recipe, limit=limit)
+
+
+def _admin_optional(request: Request) -> bool:
+    try:
+        require_admin(request, request.headers.get("X-Admin-Token"))
+        return True
+    except DomainError as error:
+        if error.code in {"FORBIDDEN", "ADMIN_NOT_CONFIGURED"}:
+            return False
+        raise
+
+
+@router.get("/compiler/recipes")
+def compiler_recipes(
+    request: Request,
+    view: str | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    service=Depends(platform),
+):
+    if view == "holdout" and not _admin_optional(request):
+        raise DomainError("FORBIDDEN", "查看 holdout 需要管理员令牌", 403)
+    holdout = True if view == "holdout" else (False if view == "seen" else None)
+    rows = service.store.list_recipes(holdout=holdout, limit=limit, offset=offset)
+    counts = service.store.recipe_counts()
+    if not counts.get("total_rows"):
+        from app.services.compiler.split import list_generated_summaries
+
+        rows = list_generated_summaries(holdout=holdout, limit=limit, offset=offset)
+    return {"recipes": rows, **counts}
+
+
+@router.get("/compiler/recipes/{recipe_id}")
+def compiler_recipe(recipe_id: str, request: Request, service=Depends(platform)):
+    from app.services.compiler.split import is_holdout
+
+    recipe = service.store.get_recipe(recipe_id)
+    body = None
+    if recipe is None:
+        from app.services.compiler.split import recipe_body_from_generated
+
+        body = recipe_body_from_generated(recipe_id)
+        if body is None:
+            raise DomainError("RECIPE_INVALID", "配方不存在", 404)
+    privileged = _admin_optional(request)
+    hidden = is_holdout(recipe_id) or (recipe.holdout if recipe is not None else False)
+    if hidden and not privileged:
+        title = recipe.title if recipe is not None else body.get("title")
+        return {
+            "id": recipe_id,
+            "title": title,
+            "holdout": True,
+            "calibrated_at": recipe.calibrated_at if recipe is not None else None,
+        }
+    if recipe is not None:
+        return recipe.model_dump(mode="json")
+    return body
+
+
+@router.post("/compiler/calibrate", dependencies=admin)
+def compiler_calibrate(recipe_id: str, key: Key, service=Depends(platform)):
+    from app.services.compiler.calibrate import calibrate_recipe
+
+    if service.twin is None:
+        raise DomainError("TWIN_UNAVAILABLE", "影子世界未配置", 503)
+    recipe = service.store.get_recipe(recipe_id)
+    if recipe is None:
+        from app.services.compiler.enumerate import enumerate_recipes
+
+        recipe = next((item for item in enumerate_recipes() if item.id == recipe_id), None)
+        if recipe is None:
+            raise DomainError("RECIPE_INVALID", "配方不存在", 404)
+    calibrated = calibrate_recipe(service.twin, recipe)
+    service.store.upsert_recipe(calibrated)
+    with service.store.session() as session, session.begin():
+        service.store.audit(session, None, "calibration", {"recipe_id": calibrated.id})
+    return calibrated.model_dump(mode="json")
+
+
+@router.post("/compiler/freeze", dependencies=admin)
+def compiler_freeze(key: Key, service=Depends(platform)):
+    if not service.settings.allow_holdout_freeze:
+        raise DomainError("FORBIDDEN", "当前配置禁止重冻 holdout", 403)
+    from app.services.compiler.split import write_holdout
+
+    return write_holdout()

@@ -53,6 +53,14 @@ class CatalogAction:
     mode: str = ""
     profile: str = ""
     probe: str = ""
+    cpus: str = ""
+    memory: str = ""
+    delay_ms: int = 0
+    loss_pct: int = 0
+    max_connections: int = 0
+    maxmemory: str = ""
+    maxmemory_policy: str = ""
+    scramble: bool = False
 
 
 def _life(service: str, verb: str) -> CatalogAction:
@@ -172,6 +180,133 @@ def _build() -> dict[str, CatalogAction]:
                     summary=f"把 {service} {net_op} 到演示网络",
                 )
             )
+    add(
+        CatalogAction(
+            "MYSQL_SCRAMBLE_DEMO_PASSWORD",
+            "demo-mysql",
+            "mysql_password_scramble",
+            scramble=True,
+            summary="把实验账号改成仓库内固定乱码",
+        )
+    )
+    for service in SERVICES:
+        for cpus in ("0.1", "0.2", "0.5"):
+            add(
+                CatalogAction(
+                    f"CPU_{service.replace('-', '_').upper()}_{cpus.replace('.', '_')}",
+                    service,
+                    "cpu_limit",
+                    cpus=cpus,
+                    summary=f"限制 {service} CPU 为 {cpus}",
+                )
+            )
+        add(
+            CatalogAction(
+                f"CPU_{service.replace('-', '_').upper()}_RESET",
+                service,
+                "cpu_limit",
+                cpus="0",
+                summary=f"取消 {service} 的 CPU 限制",
+            )
+        )
+        for memory in ("32m", "64m", "128m"):
+            add(
+                CatalogAction(
+                    f"MEM_{service.replace('-', '_').upper()}_{memory.upper()}",
+                    service,
+                    "mem_limit",
+                    memory=memory,
+                    summary=f"限制 {service} 内存为 {memory}",
+                )
+            )
+        add(
+            CatalogAction(
+                f"MEM_{service.replace('-', '_').upper()}_RESET",
+                service,
+                "mem_limit",
+                memory="0",
+                summary=f"取消 {service} 的内存限制",
+            )
+        )
+        for delay in (50, 100, 200, 500):
+            add(
+                CatalogAction(
+                    f"NETEM_DELAY_{service.replace('-', '_').upper()}_{delay}",
+                    service,
+                    "netem_delay",
+                    delay_ms=delay,
+                    summary=f"{service} 延迟 {delay}ms",
+                )
+            )
+        for loss in (5, 10, 20):
+            add(
+                CatalogAction(
+                    f"NETEM_LOSS_{service.replace('-', '_').upper()}_{loss}",
+                    service,
+                    "netem_loss",
+                    loss_pct=loss,
+                    summary=f"{service} 丢包 {loss}%",
+                )
+            )
+        add(
+            CatalogAction(
+                f"NETEM_CLEAR_{service.replace('-', '_').upper()}",
+                service,
+                "netem_clear",
+                summary=f"清除 {service} 的 netem",
+            )
+        )
+    for value in (2, 5, 10, 151):
+        add(
+            CatalogAction(
+                f"MYSQL_MAX_CONNECTIONS_{value}",
+                "demo-mysql",
+                "mysql_max_connections",
+                max_connections=value,
+                summary=f"SET GLOBAL max_connections={value}",
+            )
+        )
+    for value in ("1mb", "4mb", "16mb", "0"):
+        token = value.upper()
+        add(
+            CatalogAction(
+                f"REDIS_MAXMEMORY_{token}",
+                "demo-redis",
+                "redis_maxmemory",
+                maxmemory=value,
+                summary=f"CONFIG SET maxmemory {value}",
+            )
+        )
+    for policy in ("noeviction", "allkeys-lru"):
+        add(
+            CatalogAction(
+                f"REDIS_POLICY_{policy.upper().replace('-', '_')}",
+                "demo-redis",
+                "redis_maxmemory_policy",
+                maxmemory_policy=policy,
+                summary=f"CONFIG SET maxmemory-policy {policy}",
+            )
+        )
+    for mode in ("slow", "empty", "wrong_json"):
+        add(
+            CatalogAction(
+                f"APP_MODE_{mode.upper()}",
+                "demo-app",
+                "app_mode",
+                mode=mode,
+                summary=f"把应用模式写成 {mode}",
+            )
+        )
+    for profile in ("mysql", "blackhole"):
+        add(
+            CatalogAction(
+                f"NGINX_UPSTREAM_{profile.upper()}",
+                "demo-nginx",
+                "nginx_profile",
+                profile=profile,
+                summary=f"换成固定的 {profile} Nginx 上游",
+            )
+        )
     bases = [entry for entry in catalog.values() if entry.kind != "none"]
     for entry in bases:
         for probe in CHECK_IDS:
@@ -653,8 +788,26 @@ def perform(docker, action_id: str) -> dict:
         return docker.apply_mysql_statement(entry.statement_id)
     if entry.kind == "mysql_password":
         return docker.reset_demo_password()
+    if entry.kind == "mysql_password_scramble":
+        return docker.scramble_demo_password()
     if entry.kind == "redis":
         return docker.apply_redis_operation(entry.redis_op)
     if entry.kind == "net":
         return docker.network(entry.target, entry.net_op)
+    if entry.kind == "cpu_limit":
+        return docker.update_resources(entry.target, cpus=entry.cpus)
+    if entry.kind == "mem_limit":
+        return docker.update_resources(entry.target, memory=entry.memory)
+    if entry.kind == "netem_delay":
+        return docker.apply_netem(entry.target, delay_ms=entry.delay_ms)
+    if entry.kind == "netem_loss":
+        return docker.apply_netem(entry.target, loss_pct=entry.loss_pct)
+    if entry.kind == "netem_clear":
+        return docker.clear_netem(entry.target)
+    if entry.kind == "mysql_max_connections":
+        return docker.set_mysql_max_connections(entry.max_connections)
+    if entry.kind == "redis_maxmemory":
+        return docker.set_redis_config("maxmemory", entry.maxmemory)
+    if entry.kind == "redis_maxmemory_policy":
+        return docker.set_redis_config("maxmemory-policy", entry.maxmemory_policy)
     raise DomainError("BLOCKED", "拒绝目录之外的动作")

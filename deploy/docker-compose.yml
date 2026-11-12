@@ -9,6 +9,7 @@ services:
       MYSQL_PASSWORD: ${DEMO_MYSQL_PASSWORD:?set DEMO_MYSQL_PASSWORD}
     ports: ["127.0.0.1:${MYSQL_PORT:-13306}:3306"]
     volumes: ["mysql-data:/var/lib/mysql"]
+    cap_add: ["NET_ADMIN"]
     healthcheck:
       test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_PASSWORD mysql -u demo -D demo -Nse 'SELECT 1' | grep -qx 1"]
       interval: 3s
@@ -17,8 +18,10 @@ services:
       start_period: 30s
 
   demo-redis:
-    image: redis:7.4.7
+    build: {context: ../demo/images/redis}
+    image: aiops-demo-redis:local
     ports: ["127.0.0.1:${REDIS_PORT:-16379}:6379"]
+    cap_add: ["NET_ADMIN"]
     healthcheck:
       test: ["CMD", "redis-cli", "PING"]
       interval: 3s
@@ -27,6 +30,7 @@ services:
 
   demo-app:
     build: {context: ../demo/demo-app}
+    image: aiops-demo-app:local
     environment:
       MYSQL_HOST: demo-mysql
       MYSQL_PORT: "3306"
@@ -34,7 +38,8 @@ services:
       REDIS_HOST: demo-redis
       APP_MODE_FILE: /control/mode
     volumes: ["../demo/app-control:/control:ro"]
-    ports: ["127.0.0.1:18000:8000"]
+    ports: ["127.0.0.1:${APP_PORT:-18000}:8000"]
+    cap_add: ["NET_ADMIN"]
     depends_on:
       demo-mysql: {condition: service_healthy}
       demo-redis: {condition: service_healthy}
@@ -45,9 +50,11 @@ services:
       retries: 10
 
   demo-nginx:
-    image: nginx:1.28.0-alpine
-    ports: ["127.0.0.1:18080:80"]
+    build: {context: ../demo/images/nginx}
+    image: aiops-demo-nginx:local
+    ports: ["127.0.0.1:${NGINX_PORT:-18080}:80"]
     volumes: ["../demo/nginx/active/default.conf:/etc/nginx/conf.d/default.conf:ro"]
+    cap_add: ["NET_ADMIN"]
     depends_on:
       demo-app: {condition: service_healthy}
     healthcheck:

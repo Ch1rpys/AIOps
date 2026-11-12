@@ -219,6 +219,46 @@ def test_plan_drops_shell_extra_field_without_executing_it():
     assert "shell" not in plan.model_dump()
 
 
+def test_unseen_json_object_prompt_uses_compact_schema(settings):
+    settings.holmes_json_mode = "json_object"
+    captured = {}
+
+    def handler(request):
+        captured["payload"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "analysis": json.dumps(
+                    {
+                        "root_cause": "OTHER",
+                        "summary": "TEST/MOCK",
+                        "evidence_ids": ["ev_1"],
+                        "confidence": 0.1,
+                        "evidence_sufficient": False,
+                    }
+                )
+            },
+        )
+
+    from app.schemas.domain import Evidence
+
+    evidence = [
+        Evidence(id="ev_1", source="docker-compose", kind="container_state", raw={}),
+        Evidence(id="ev_2", source="mysql_select_1", kind="probe", raw={}),
+    ]
+    with httpx.Client(transport=holmes_transport(handler)) as client:
+        HolmesDiagnosisProvider(settings, client).diagnose_domain(
+            {"evidence": [item.model_dump(mode="json") for item in evidence]},
+            verify_capabilities=False,
+        )
+    prompt = captured["payload"]["additional_system_prompt"]
+    assert "JSON Schema" in prompt
+    schema_part = prompt.split("JSON Schema:", 1)[1]
+    assert "failing_check_ids" in schema_part
+    assert "candidates" not in schema_part
+    assert "requested_checks" not in schema_part
+
+
 def test_holmes_json_object_mode_still_validates_schema(settings):
     settings.holmes_json_mode = "json_object"
 

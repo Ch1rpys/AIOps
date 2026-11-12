@@ -69,6 +69,21 @@ def compose_base() -> list[str]:
     ]
 
 
+def twin_compose_base() -> list[str]:
+    return [
+        "docker",
+        "--context",
+        "default",
+        "compose",
+        "--project-name",
+        "aiops-twin",
+        "--env-file",
+        str(ENV_FILE),
+        "--file",
+        str(ROOT / "deploy/docker-compose.twin.yml"),
+    ]
+
+
 def run(arguments: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
     return subprocess.run(arguments, cwd=ROOT, env=docker_env(), check=False, **kwargs)
 
@@ -314,6 +329,21 @@ def start_containers() -> None:
     holmes = run([*compose_base(), "up", "-d", "--wait", "--wait-timeout", "180", "holmes"])
     if holmes.returncode != 0:
         raise DemoError("Holmes 启动失败")
+    log("正在拉起影子世界（四个独立容器；失败不影响真环境）")
+    twin = run(
+        [
+            *twin_compose_base(),
+            "up",
+            "-d",
+            "--build",
+            "--wait",
+            "--wait-timeout",
+            "180",
+            *DEMOS,
+        ]
+    )
+    if twin.returncode != 0:
+        log("影子世界未能启动。工作台旧场景仍可用，但没有反事实试修。本机需要再跑四个容器。")
 
 
 def port_open(port: int) -> bool:

@@ -1,4 +1,4 @@
-import type { Json, Status } from './types';
+import type { Json, Status, TwinTrial } from './types';
 
 export const statusLabels: Record<Status, string> = {
   CREATED: '准备注入',
@@ -20,6 +20,7 @@ export const statusLabels: Record<Status, string> = {
 export const phaseLabels: Record<string, string> = {
   ...statusLabels,
   APPROVAL: '人工审批',
+  TWIN_TRIAL: '影子试修',
 };
 
 export const scenarioLabels: Record<string, string> = {
@@ -29,6 +30,7 @@ export const scenarioLabels: Record<string, string> = {
   NGINX_UPSTREAM: 'Nginx 上游配置错误',
   APP_HTTP_500: '应用固定 500',
   DUAL_MYSQL_REDIS: 'MySQL 与 Redis 同时停止',
+  COMPILED: '编译器配方',
 };
 
 export const rootCauseLabels: Record<string, string> = {
@@ -154,4 +156,28 @@ export function durationLabel(milliseconds: number | undefined): string {
   if (milliseconds === undefined || !Number.isFinite(milliseconds)) return '未记录';
   if (milliseconds < 1000) return `${milliseconds} ms`;
   return `${(milliseconds / 1000).toFixed(1)} 秒`;
+}
+
+export const worldLabels: Record<string, string> = {
+  primary: '真环境',
+  twin: '影子世界',
+};
+
+export function worldName(name?: string | null): string {
+  if (!name) return '未知世界';
+  return worldLabels[name] ?? name;
+}
+
+export function matchRateText(rate: number | null | undefined): string {
+  if (rate == null) return '不适用';
+  return `${Math.round(rate * 100)}% 探针一致`;
+}
+
+export function trialPredictionText(trial?: TwinTrial | null): string {
+  if (!trial) return '尚未试修';
+  if (trial.skipped) {
+    return `影子不可用，本次没有反事实预测${trial.reason ? `（${trial.reason}）` : ''}`;
+  }
+  if (trial.would_resolve_signature) return '影子预测：这次可以完全恢复';
+  return '影子预测：这次还不能完全恢复';
 }

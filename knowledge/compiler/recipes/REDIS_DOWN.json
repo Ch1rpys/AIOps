@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "id": "rec_5a87c83a76b5",
+  "title": "缓存探针失败",
+  "primitives": [
+    {
+      "kind": "life",
+      "service": "demo-redis",
+      "verb": "stop"
+    }
+  ],
+  "recoverable": true,
+  "negative": false,
+  "poison": false,
+  "canonical_scene": "REDIS_DOWN",
+  "preferred_actions": [
+    "START_DEMO_REDIS"
+  ],
+  "canonical_hash": "5a87c83a76b5f85e52815b0640a60b787b21fc2e71d64a414bf3b5c9bd667795",
+  "holdout": false,
+  "compiler_version": 1,
+  "dirty": false,
+  "unsupported": false
+}

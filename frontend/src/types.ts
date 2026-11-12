@@ -5,7 +5,9 @@ export type ScenarioKey =
   | 'NGINX_502'
   | 'NGINX_UPSTREAM'
   | 'APP_HTTP_500'
-  | 'DUAL_MYSQL_REDIS';
+  | 'DUAL_MYSQL_REDIS'
+  | 'COMPILED'
+  | (string & {});
 export type Status =
   | 'CREATED'
   | 'INJECTED'
@@ -37,14 +39,80 @@ export interface LabStatus {
   error: { code: string; message: string } | null;
   active_incident_id: string | null;
   captured_at: string;
+  twin?: TwinStatus;
+}
+export interface TwinStatus {
+  status: Verdict;
+  healthy: boolean;
+  world: string;
+  compose_project: string;
+  services: Record<string, { state: string; health: string; project: string }>;
+  probes: Probe[];
+  error?: { code: string; message: string } | null;
+  locked?: boolean;
 }
 export interface Health {
   platform: Verdict;
   mode: 'REAL' | 'TEST/MOCK';
   holmes: { status: Verdict; reason?: string; http_status?: number };
   planner: { status: Verdict; configured: boolean; reason: string };
+  vision?: { status: Verdict; configured: boolean; reason?: string };
   admin_configured: boolean;
   lab: LabStatus;
+  twin?: TwinStatus;
+}
+export interface RecipeSummary {
+  id: string;
+  title?: string;
+  holdout?: boolean;
+  canonical_scene?: string | null;
+  calibrated_at?: string | null;
+  compiler_version?: number;
+}
+export interface TwinTrial {
+  world?: string;
+  recipe_id?: string;
+  action_id?: string;
+  skipped?: boolean;
+  reason?: string;
+  predicted_pass?: string[];
+  predicted_still_fail?: string[];
+  would_resolve_signature?: boolean;
+  after?: Record<string, string>;
+  before?: Record<string, string>;
+}
+export interface TwinCertificate {
+  predicted?: Record<string, string>;
+  observed?: Record<string, string>;
+  match?: Record<string, boolean>;
+  match_rate?: number;
+  surprise?: string[];
+}
+export interface TwinSearchCandidate {
+  action_id: string;
+  would_resolve_signature: boolean;
+  remaining_fail: number;
+  predicted_pass?: string[];
+  elapsed_ms?: number;
+}
+export interface TwinSearchResult {
+  recipe_id: string;
+  candidates: TwinSearchCandidate[];
+  tried: number;
+  created_at?: string;
+}
+export interface TwinSearchCandidate {
+  action_id: string;
+  would_resolve_signature: boolean;
+  remaining_fail: number;
+  predicted_pass?: string[];
+  elapsed_ms?: number;
+}
+export interface TwinSearchResult {
+  recipe_id: string;
+  candidates: TwinSearchCandidate[];
+  tried: number;
+  created_at?: string;
 }
 export interface Scenario {
   key: ScenarioKey;
@@ -147,6 +215,11 @@ export interface Incident extends IncidentSummary {
     /** M3：受限主动补采。 */
     supplement?: SupplementRecord;
     supplement_stopped?: string;
+    recipe_id?: string;
+    recipe_title?: string;
+    twin_trial?: TwinTrial;
+    twin_certificate?: TwinCertificate;
+    twin_search?: TwinSearchResult;
   };
 }
 
@@ -247,12 +320,15 @@ export interface IncidentReview {
   impact_graph: ImpactGraph;
   audit_appendix: { id: string; kind: string; created_at: string }[];
   source: string;
+  twin_trial?: TwinTrial;
+  twin_certificate?: TwinCertificate;
+  recipe_title?: string;
 }
 
 // ---- 盲诊评测 ---------------------------------------------------------------
 
-export type EvaluationArm = 'A' | 'B' | 'C' | 'L';
-export type EvaluationCohort = 'standard' | 'adversarial';
+export type EvaluationArm = 'A' | 'B' | 'C' | 'L' | 'R';
+export type EvaluationCohort = 'standard' | 'adversarial' | 'unseen';
 
 export interface EvaluationRunRow {
   id: string;
@@ -267,7 +343,7 @@ export interface EvaluationRunRow {
   token_usage: Record<string, Json> | null;
   fault_present: number | null;
   created_at: string;
-  cohort?: 'standard' | 'adversarial' | 'abstain';
+  cohort?: 'standard' | 'adversarial' | 'abstain' | 'unseen';
   root_cause_biased?: number | null;
   illegal_action_proposed?: number | null;
   illegal_action_executed?: number | null;
@@ -354,4 +430,27 @@ export interface EvaluationSummary {
   adversarial: AdversarialSummary;
   abstain: AbstainSummary;
   notes: string[];
+  unseen?: {
+    unseen_n: number | null;
+    unseen_signature_recall: number | null;
+    unseen_signature_precision: number | null;
+    unseen_drift_excluded: number | null;
+    unseen_weak_parse?: number | null;
+    note?: string;
+  };
+  platform?: {
+    twin_available: boolean | null;
+    twin_trials: number | null;
+    twin_skipped: number | null;
+    twin_fidelity: number | null;
+    twin_partial_predictions: number | null;
+    r_arm_resolve_rate: number | null;
+    r_arm_trials_avg: number | null;
+    unseen_n: number | null;
+    unseen_signature_recall: number | null;
+    unseen_signature_precision: number | null;
+    unseen_drift_excluded: number | null;
+    holdout_size: number | null;
+    recipe_pool_size: number | null;
+  };
 }

@@ -89,9 +89,12 @@ def checkable_text(payload: dict) -> str:
     """
     # 声明过的答案空间：诊断契约与复核契约的 root_cause 枚举。
     # json_object 模式下契约会被拼进提示词，因此字符串也要剔除。
+    from app.integrations.models import COMPACT_DIAGNOSIS_SCHEMA
+
     blobs = [
         json.dumps(Diagnosis.model_json_schema(), ensure_ascii=False),
         json.dumps(DomainReview.model_json_schema(), ensure_ascii=False),
+        json.dumps(COMPACT_DIAGNOSIS_SCHEMA, ensure_ascii=False),
     ]
     parts = []
     for key, value in payload.items():
@@ -320,3 +323,59 @@ def test_attachment_payload_has_no_scenario_markers(tmp_path, world, mode):
     assert "MYSQL_SERVICE_STOPPED.png" not in text
     assert "attachments/" not in text
     assert attachment["sha256"] not in text
+
+
+def test_blind_payload_strips_recipe_leakage(tmp_path, world):
+    settings = blind_settings(tmp_path, "json_schema")
+    evidence = EvidenceAgent(settings, world, world).collect_domain()
+    ids = [item.id for item in evidence]
+    recorder = Recorder(
+        {
+            "root_cause": "OTHER",
+            "summary": "TEST/MOCK",
+            "evidence_ids": ids,
+            "confidence": 0.1,
+            "evidence_sufficient": False,
+        }
+    )
+    client = httpx.Client(transport=httpx.MockTransport(recorder.handler))
+    provider = HolmesDiagnosisProvider(settings, client)
+    provider.diagnose_domain(
+        {
+            "evidence": [item.model_dump(mode="json") for item in evidence],
+            "recipe_id": "rec_aaaaaaaaaaaa",
+            "primitives": [{"kind": "life", "service": "demo-mysql", "verb": "stop"}],
+            "holdout": True,
+            "canonical_hash": "deadbeef",
+            "signature": {"failing_checks": ["mysql_select_1"]},
+        }
+    )
+    text = checkable_text(recorder.payload)
+    assert "rec_aaaaaaaaaaaa" not in text
+    assert "primitives" not in text
+    assert "holdout" not in text
+    assert "canonical_hash" not in text
+    from app.services.compiler.split import freeze_ids
+
+    for recipe_id in freeze_ids()[:5]:
+        assert recipe_id not in text
+
+
+def test_incident_list_has_no_recipe_primitives(client):
+    injected = client.post(
+        "/api/scenarios/MYSQL_DOWN/inject",
+        json={"confirm": True},
+        headers={"Idempotency-Key": "TEST-leak-list-0001"},
+    )
+    assert injected.status_code == 201
+    listing = client.get("/api/incidents").json()
+    blob = json.dumps(listing, ensure_ascii=False)
+    assert "primitives" not in blob
+    assert "canonical_hash" not in blob
+
+
+def test_unseen_summary_without_token_hides_truth(client):
+    summary = client.get("/api/evaluation/unseen/summary").json()
+    blob = json.dumps(summary, ensure_ascii=False)
+    assert "primitives" not in blob
+    assert "canonical_hash" not in blob

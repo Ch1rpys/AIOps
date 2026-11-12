@@ -45,8 +45,19 @@ class Settings(BaseSettings):
     app_url: str = "http://127.0.0.1:18000"
     nginx_url: str = "http://127.0.0.1:18080"
     redis_port: int = Field(default=16379, ge=1024, le=65535)
+    # 影子世界：独立项目、独立端口、独立配置目录。见计划 §5.1。
+    twin_mysql_port: int = Field(default=23306, ge=1024, le=65535)
+    twin_redis_port: int = Field(default=26379, ge=1024, le=65535)
+    twin_app_url: str = "http://127.0.0.1:28000"
+    twin_nginx_url: str = "http://127.0.0.1:28080"
     probe_timeout: int = Field(default=3, ge=1, le=10)
     docker_timeout: int = Field(default=20, ge=1, le=60)
+    twin_docker_timeout: int = Field(default=30, ge=1, le=120)
+    # 仅开发允许重冻 holdout。演示/生产默认关闭。
+    allow_holdout_freeze: bool = False
+    # 把 R 臂搜索结果喂给规划模型会污染对照，默认关闭。
+    r_arm_planner_context: bool = False
+    r_arm_max_candidates: int = Field(default=30, ge=1, le=80)
     model_timeout: int = Field(default=90, ge=1, le=180)
     # 评测专用预算：见 docs/落地执行计划.md §9.4。
     # 采用「评测专用较短超时」方案，使单次调用不可能突破总预算，
@@ -54,6 +65,10 @@ class Settings(BaseSettings):
     evaluation_model_timeout: int = Field(default=15, ge=1, le=60)
     evaluation_budget_seconds: int = Field(default=45, ge=5, le=300)
     evaluation_max_model_calls: int = Field(default=3, ge=1, le=10)
+    # 未见故障诊断没有六场景提示，模型更慢；单独预算，不挤占 canonical 的 15s×3。
+    # 实测 qwen 单次常超过 90s，客户端先超时则签名覆盖永远进不了分母。
+    evaluation_unseen_model_timeout: int = Field(default=180, ge=1, le=300)
+    evaluation_unseen_budget_seconds: int = Field(default=300, ge=5, le=600)
     evaluation_max_extra_collects: int = Field(default=2, ge=0, le=5)
     # M3 受限主动补采：轮次、单轮检查数与总耗时预算都要有上限。
     supplement_max_rounds: int = Field(default=2, ge=0, le=2)
@@ -81,6 +96,8 @@ class Settings(BaseSettings):
                 "评测预算不自洽：evaluation_model_timeout × evaluation_max_model_calls "
                 "必须不大于 evaluation_budget_seconds"
             )
+        if self.evaluation_unseen_model_timeout > self.evaluation_unseen_budget_seconds:
+            raise ValueError("未见评测超时不能大于未见总预算")
         return self
 
 

@@ -1,0 +1,42 @@
+{
+  "frozen_at": "2026-11-12T07:09:01.919011+00:00",
+  "compiler_version": 1,
+  "algorithm": "hash_sort_tail_30_percent",
+  "canonical_excluded": [
+    "MYSQL_DOWN",
+    "REDIS_DOWN",
+    "NGINX_502",
+    "NGINX_UPSTREAM",
+    "APP_HTTP_500",
+    "DUAL_MYSQL_REDIS"
+  ],
+  "ids": [
+    "rec_a8632b0f8be8",
+    "rec_a89d82624c22",
+    "rec_aa5a2047ec74",
+    "rec_abf90b1c17c5",
+    "rec_b0f2104025c5",
+    "rec_b1720b0550e0",
+    "rec_b2873e45127b",
+    "rec_b68f4d959d74",
+    "rec_b6da9b352b3c",
+    "rec_b956b55cb7d9",
+    "rec_bab92cde81b6",
+    "rec_bb817876241d",
+    "rec_bd648b35b7ef",
+    "rec_c01680a21176",
+    "rec_c4eac909f432",
+    "rec_cc3939525fd0",
+    "rec_cea864853072",
+    "rec_d32e7686444b",
+    "rec_d92e15bf7fdd",
+    "rec_dac518f5a600",
+    "rec_db044b7dbd05",
+    "rec_db6c71fb2a5b",
+    "rec_e226b4a936da",
+    "rec_e473522cb8e8",
+    "rec_ee6d30adcfd3",
+    "rec_f0698c041193",
+    "rec_f5d46a535504"
+  ]
+}

@@ -23,8 +23,10 @@ import {
   probeName,
   riskName,
   rootCauseName,
+  matchRateText,
   scenarioName,
   shortId,
+  trialPredictionText,
   shortTimeLabel,
   statusLabels,
   statusTone,
@@ -47,6 +49,7 @@ import type {
   Json,
   Probe,
   Status,
+  TwinSearchResult,
 } from '../types';
 
 const route = useRoute();
@@ -130,6 +133,28 @@ const blockedReason = computed(() => {
   if (busy.value) return '操作执行中…';
   return '';
 });
+
+const showRArm = ref(false);
+const rArmBusy = ref(false);
+const rArmError = ref('');
+const rArmResult = ref<TwinSearchResult | null>(null);
+
+async function runRArmSearch() {
+  const recipeId = incident.value?.detail.recipe_id;
+  if (!recipeId) {
+    rArmError.value = '本工单没有配方，无法做影子搜索。';
+    return;
+  }
+  rArmBusy.value = true;
+  rArmError.value = '';
+  try {
+    rArmResult.value = await api.twinSearch(crypto.randomUUID(), recipeId, 5);
+  } catch (cause) {
+    rArmError.value = errorMessage(cause);
+  } finally {
+    rArmBusy.value = false;
+  }
+}
 
 let timer: ReturnType<typeof setTimeout> | undefined;
 let disposed = false;
@@ -547,7 +572,9 @@ onUnmounted(() => {
     <!-- 页头规范 (V1-02) -->
     <div class="page-header">
       <div class="page-header-title-row">
-        <h1>{{ scenarioName(incident.scenario_key) }}</h1>
+        <h1>
+          {{ incident.detail.recipe_title || scenarioName(incident.scenario_key) }}
+        </h1>
         <span class="state-badge" :data-tone="statusTone(incident.status)">
           {{ statusLabels[incident.status] }}
         </span>
@@ -603,6 +630,13 @@ onUnmounted(() => {
           </svg>
           下载报告
         </a>
+        <a
+          class="header-action-btn secondary-btn"
+          :href="`/api/incidents/${encodeURIComponent(id)}/talk.md`"
+          download
+        >
+          三分钟讲稿
+        </a>
         <ElButton
           v-if="incident.status === 'INJECTED'"
           type="primary"
@@ -642,6 +676,74 @@ onUnmounted(() => {
       @inspect-step="openStepDrawer"
       @inspect-history="openHistoryDrawer"
     />
+
+    <section
+      v-if="incident.detail.twin_trial || incident.detail.twin_certificate"
+      class="proto-card"
+    >
+      <div class="section-heading">
+        <h2>影子预测与证书</h2>
+        <span
+          v-if="incident.detail.twin_certificate?.match_rate != null"
+          class="state-badge"
+          :data-tone="incident.detail.twin_certificate.match_rate === 1 ? 'success' : 'warning'"
+        >
+          {{ matchRateText(incident.detail.twin_certificate.match_rate) }}
+        </span>
+      </div>
+      <p class="help-text">{{ trialPredictionText(incident.detail.twin_trial) }}</p>
+      <div
+        v-if="incident.detail.twin_trial && !incident.detail.twin_trial.skipped"
+        class="filter-bar"
+      >
+        <span class="muted text-12">将变绿</span>
+        <span class="text-12">{{
+          (incident.detail.twin_trial.predicted_pass || []).join('、') || '无'
+        }}</span>
+        <span class="muted text-12">仍红</span>
+        <span class="text-12">{{
+          (incident.detail.twin_trial.predicted_still_fail || []).join('、') || '无'
+        }}</span>
+      </div>
+      <div v-if="incident.detail.twin_certificate?.surprise?.length" class="filter-bar">
+        <span class="muted text-12">与真环境不符</span>
+        <span class="text-12">{{ incident.detail.twin_certificate.surprise.join('、') }}</span>
+      </div>
+    </section>
+
+    <section class="proto-card">
+      <div class="section-heading">
+        <h2>影子搜索建议</h2>
+        <span class="state-badge" data-tone="neutral">默认关闭</span>
+      </div>
+      <p class="help-text">
+        R
+        臂在影子里按目录搜索能消签名的动作，不计模型正确率，也不进入盲诊。打开开关后才展示；不会自动跑搜索。
+      </p>
+      <label class="text-12" style="display: flex; gap: 8px; align-items: center">
+        <input v-model="showRArm" type="checkbox" />
+        显示影子搜索建议
+      </label>
+      <div v-if="showRArm" style="margin-top: 12px">
+        <ElButton
+          :disabled="!canAct || rArmBusy || !incident.detail.recipe_id"
+          :loading="rArmBusy"
+          @click="runRArmSearch"
+        >
+          在影子中搜索（最多 5 个候选）
+        </ElButton>
+        <p v-if="rArmError" class="help-text" style="margin-top: 8px">{{ rArmError }}</p>
+        <ul v-if="rArmResult?.candidates?.length" class="text-12" style="margin-top: 8px">
+          <li v-for="item in rArmResult.candidates" :key="item.action_id">
+            {{ actionName(item.action_id) }}
+            ·
+            {{ item.would_resolve_signature ? '可消签名' : '不能完全恢复' }}
+            · 仍失败 {{ item.remaining_fail }}
+          </li>
+        </ul>
+        <p v-else-if="rArmResult" class="help-text" style="margin-top: 8px">没有排出候选。</p>
+      </div>
+    </section>
 
     <!-- 主体双栏 (4.2) -->
     <div class="workbench-two-col">
@@ -1117,7 +1219,11 @@ onUnmounted(() => {
             <!-- 待审批状态 (V1-09) -->
             <template v-if="incident.status === 'WAITING_APPROVAL'">
               <div class="notice approval-notice" style="margin-bottom: 12px">
-                批准后启动目标服务，恢复结果以独立复测为准。
+                {{
+                  incident.detail.twin_trial
+                    ? trialPredictionText(incident.detail.twin_trial)
+                    : '批准后启动目标服务，恢复结果以独立复测为准。'
+                }}
               </div>
 
               <!-- 折叠的审批意见输入 -->

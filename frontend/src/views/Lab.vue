@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { ElAlert, ElButton, ElDialog, ElSkeleton } from 'element-plus';
+import { ElAlert, ElButton, ElDialog, ElInput, ElSkeleton } from 'element-plus';
 import { api, errorMessage } from '../api';
 import { adminToken } from '../composables/session';
 import { useEnvironment } from '../composables/environment';
@@ -20,8 +20,16 @@ const injectingKey = ref<string | null>(null);
 const confirmation = ref<Scenario | null>(null);
 const poison = ref(false);
 const catalogCount = ref<number | null>(null);
+const recipeCounts = ref<{
+  recipe_pool_size: number | null;
+  holdout_size: number | null;
+  enumerated_size: number | null;
+}>({ recipe_pool_size: null, holdout_size: null, enumerated_size: null });
 const showBaselineDetails = ref(false);
 const injectKeys = new Map<ScenarioKey, string>();
+const compileConfirm = ref(false);
+const compileKey = ref(crypto.randomUUID());
+const recipeId = ref('');
 
 const blockedReason = computed(() => {
   if (!health.value) return '尚未取得有效环境状态，请点击重新检查。';
@@ -55,6 +63,16 @@ async function loadScenarios() {
       catalogCount.value = (await api.actionCatalog()).count;
     } catch {
       catalogCount.value = null;
+    }
+    try {
+      const recipes = await api.compilerRecipes('seen');
+      recipeCounts.value = {
+        recipe_pool_size: recipes.recipe_pool_size,
+        holdout_size: recipes.holdout_size,
+        enumerated_size: recipes.enumerated_size,
+      };
+    } catch {
+      recipeCounts.value = { recipe_pool_size: null, holdout_size: null, enumerated_size: null };
     }
   } catch (cause) {
     error.value = errorMessage(cause);
@@ -96,6 +114,25 @@ async function inject() {
   try {
     const result = await api.inject(selected.key, key, poison.value);
     injectKeys.delete(selected.key);
+    await router.push(`/incidents/${result.incident_id}`);
+  } catch (cause) {
+    error.value = errorMessage(cause);
+    await refresh();
+  } finally {
+    busy.value = false;
+    injectingKey.value = null;
+  }
+}
+
+async function injectCompiled() {
+  if (busy.value) return;
+  compileConfirm.value = false;
+  busy.value = true;
+  injectingKey.value = 'COMPILED';
+  error.value = '';
+  try {
+    const result = await api.compileInject(compileKey.value, recipeId.value.trim() || undefined);
+    compileKey.value = crypto.randomUUID();
     await router.push(`/incidents/${result.incident_id}`);
   } catch (cause) {
     error.value = errorMessage(cause);
@@ -158,9 +195,33 @@ onMounted(loadScenarios);
   <div class="section-heading" style="margin-top: 8px">
     <h2>选择故障场景</h2>
     <span v-if="catalogCount" class="muted text-12">
-      修复目录 {{ catalogCount }} 条。目录外的命令不会执行；目录内的其他路线，复测通过才算修好。
+      修复目录 {{ catalogCount }} 条。配方池 {{ recipeCounts.enumerated_size ?? '尚未枚举' }} /
+      holdout {{ recipeCounts.holdout_size ?? '尚未冻结' }}。目录外的命令不会执行。
     </span>
   </div>
+
+  <article class="scenario-card">
+    <div
+      style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px"
+    >
+      <h2>随机 seen 配方</h2>
+      <span class="state-badge" data-tone="info">编译器</span>
+    </div>
+    <p class="scenario-desc-line">
+      从已冻结的 seen 池抽一条，同时写入真环境和影子。holdout 是评测考题，这里会拒绝。
+    </p>
+    <div class="button-row" style="margin-top: 8px; align-items: center">
+      <ElButton
+        type="primary"
+        :loading="injectingKey === 'COMPILED'"
+        :disabled="!!blockedReason || busy || loading || scenariosLoading"
+        @click="compileConfirm = true"
+      >
+        {{ injectingKey === 'COMPILED' ? '注入中…' : '抽一条 seen 注入' }}
+      </ElButton>
+      <ElInput v-model="recipeId" placeholder="或粘贴 rec_… 指定配方" style="max-width: 280px" />
+    </div>
+  </article>
 
   <ElSkeleton v-if="scenariosLoading && !scenarios.length" :rows="5" animated />
   <div v-else-if="!scenarios.length" class="empty proto-card">
@@ -267,6 +328,30 @@ onMounted(loadScenarios);
       <ElButton @click="confirmation = null">取消</ElButton>
       <ElButton type="danger" :disabled="busy || loading || !!blockedReason" @click="inject">
         {{ confirmation && stopsContainer(confirmation) ? '确认停止并注入' : '确认注入' }}
+      </ElButton>
+    </template>
+  </ElDialog>
+
+  <ElDialog v-model="compileConfirm" title="确认注入编译器配方" width="min(440px, 92vw)">
+    <p style="font-size: 14px; line-height: 22px">
+      {{
+        recipeId.trim()
+          ? `将注入指定配方 ${recipeId.trim()}，同时写入真环境 aiops-demo 和影子 aiops-twin。`
+          : '将抽一条 seen 配方，同时写入真环境 aiops-demo 和影子 aiops-twin。'
+      }}
+      确认框只描述可观测症状，不会展示 holdout 原语。
+    </p>
+    <p class="help-text" style="margin-top: 8px">
+      这不是演示按钮里的六种旧题。若抽到的编号属于 holdout，服务端会拒绝并说明这是评测考题。
+    </p>
+    <template #footer>
+      <ElButton @click="compileConfirm = false">取消</ElButton>
+      <ElButton
+        type="danger"
+        :disabled="busy || loading || !!blockedReason"
+        @click="injectCompiled"
+      >
+        确认双侧注入
       </ElButton>
     </template>
   </ElDialog>

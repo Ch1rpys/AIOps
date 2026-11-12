@@ -5,9 +5,11 @@ import { ElMessage } from 'element-plus';
 import {
   actionName,
   durationLabel,
+  matchRateText,
   probeName,
   rootCauseName,
   scenarioName,
+  trialPredictionText,
   verdictLabels,
 } from '../display';
 import type { ImpactNode, IncidentReview, Probe } from '../types';
@@ -185,6 +187,22 @@ async function copyLink() {
           </ul>
         </section>
       </div>
+
+      <section v-if="review.twin_trial || review.twin_certificate" class="ai-work">
+        <h3>影子预测 vs 真环境复测</h3>
+        <p class="summary">{{ trialPredictionText(review.twin_trial) }}</p>
+        <p v-if="review.twin_certificate" class="cause">
+          {{ matchRateText(review.twin_certificate.match_rate) }}
+        </p>
+        <ul v-if="review.twin_certificate?.match">
+          <li v-for="(ok, name) in review.twin_certificate.match" :key="name">
+            {{ probeName(String(name)) }} · {{ ok ? '与预测一致' : '与预测不符' }}
+          </li>
+        </ul>
+        <p v-if="review.twin_certificate?.surprise?.length" class="summary">
+          不符：{{ review.twin_certificate.surprise.join('、') }}。复测结论仍以真环境为准。
+        </p>
+      </section>
 
       <section class="ai-work">
         <h3>AI 做了什么</h3>

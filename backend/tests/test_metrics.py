@@ -51,12 +51,45 @@ def test_pure_diagnosis_metrics_stay_not_applicable(client):
     assert any("不记 0" in note for note in summary(client)["notes"])
 
 
+def test_platform_metrics_use_null_not_zero(client):
+    payload = summary(client)["platform"]
+    assert payload["twin_trials"] is None
+    assert payload["twin_skipped"] is None
+    assert payload["twin_fidelity"] is None
+    assert payload["r_arm_resolve_rate"] is None
+    assert payload["unseen_n"] is None
+
+
 def test_summary_notes_state_the_honesty_limits(client):
     notes = " ".join(summary(client)["notes"])
     assert "复现基线" in notes
     assert "统计显著性" in notes
     assert "假设空间" in notes
     assert "不适用" in notes
+    assert "弱解析" in notes
+    assert "R 臂" in notes
+    assert "本对照已注明污染" not in notes
+
+
+def test_r_arm_pollution_note_when_planner_context_enabled(tmp_path, world):
+    from fastapi.testclient import TestClient
+
+    from app.config import Settings
+    from app.main import create_app
+
+    settings = Settings(
+        _env_file=None,
+        data_dir=tmp_path,
+        admin_token="TEST-admin-token",
+        demo_mysql_password="private",
+        verification_interval=0,
+        fault_confirmation_interval=0,
+        r_arm_planner_context=True,
+    )
+    with TestClient(create_app(settings, world.factory)) as client:
+        client.headers["X-Admin-Token"] = "TEST-admin-token"
+        notes = " ".join(client.get("/api/evaluation/summary").json()["notes"])
+    assert "本对照已注明污染" in notes
 
 
 def test_time_is_split_by_phase(client, world):

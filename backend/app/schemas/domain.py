@@ -11,6 +11,7 @@ from pydantic import (
     Field,
     StrictBool,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -34,6 +35,14 @@ class Scenario(StrEnum):
     NGINX_UPSTREAM = "NGINX_UPSTREAM"
     APP_HTTP_500 = "APP_HTTP_500"
     DUAL_MYSQL_REDIS = "DUAL_MYSQL_REDIS"
+
+
+def try_scenario(value: str | None) -> Scenario | None:
+    """规范场景返回枚举；编译器工单的 COMPILED 等字符串返回 None。"""
+    try:
+        return Scenario(value or "MYSQL_DOWN")
+    except ValueError:
+        return None
 
 
 class Action(StrEnum):
@@ -174,6 +183,18 @@ class Diagnosis(StrictModel):
     # M3 扩展：全部可选且有默认值，现有证据与结论序列化结果不变。
     candidates: list[CandidateRootCause] = Field(default_factory=list, max_length=5)
     requested_checks: list[CheckRequest] = Field(default_factory=list, max_length=3)
+    # 未见故障：空列表不进旧序列化，避免改口现有断言。
+    affected_services: list[str] = Field(default_factory=list, max_length=8)
+    failing_check_ids: list[str] = Field(default_factory=list, max_length=6)
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_unseen_fields(self, serializer):
+        data = serializer(self)
+        if not data.get("affected_services"):
+            data.pop("affected_services", None)
+        if not data.get("failing_check_ids"):
+            data.pop("failing_check_ids", None)
+        return data
 
 
 class DomainReview(StrictModel):
@@ -275,6 +296,19 @@ class Plan(StrictModel):
         return self
 
 
+class CompileInjectRequest(StrictModel):
+    confirm: StrictBool
+    recipe_id: str | None = Field(default=None, max_length=80)
+    random: Literal["seen"] | None = None
+
+    @field_validator("confirm")
+    @classmethod
+    def require_compile_confirmation(cls, value: bool) -> bool:
+        if not value:
+            raise ValueError("操作必须明确确认")
+        return value
+
+
 class Confirmation(StrictModel):
     confirm: StrictBool
     # 工作台可选：把一段错误根因写进日志。只作为证据，不改变允许执行的动作。
@@ -305,10 +339,12 @@ class AttachmentRequest(StrictModel):
 class EvaluationRequest(StrictModel):
     """触发一次盲诊实验。scenario 是注入指令，由管理员选择，不进模型上下文。"""
 
-    scenario: Scenario
+    scenario: Scenario | None = None
     arms: list[Literal["A", "B", "C", "L"]] = Field(default_factory=lambda: ["A", "B"])
     # adversarial：日志和截图里带投毒文本，单独计分，不进普通正确率分母。
-    cohort: Literal["standard", "adversarial"] = "standard"
+    # unseen：只抽 holdout，按校准签名计分。
+    cohort: Literal["standard", "adversarial", "unseen"] = "standard"
+    recipe_id: str | None = Field(default=None, max_length=80)
     # C 臂用的截图 id（先 POST /api/evaluation/attachments 上传得到）。
     attachment_ids: list[str] = Field(default_factory=list, max_length=4)
     confirm: StrictBool
@@ -329,6 +365,14 @@ class EvaluationRequest(StrictModel):
             raise ValueError("实验臂不可重复")
         return value
 
+    @model_validator(mode="after")
+    def require_scenario_unless_unseen(self) -> "EvaluationRequest":
+        if self.cohort == "unseen":
+            return self
+        if self.scenario is None:
+            raise ValueError("非未见评测必须指定场景")
+        return self
+
 
 class Verification(StrictModel):
     verdict: Verdict
@@ -341,7 +385,7 @@ class Verification(StrictModel):
 
 class IncidentView(StrictModel):
     id: str
-    scenario_key: Scenario
+    scenario_key: str
     mode: Literal["REAL", "TEST/MOCK"]
     status: Status
     created_at: str

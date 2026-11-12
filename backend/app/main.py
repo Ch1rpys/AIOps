@@ -25,6 +25,8 @@ from app.services.attachments import AttachmentService
 from app.services.evaluation import EvaluationService
 from app.services.executor import ActionExecutor
 from app.services.platform import Platform
+from app.services.twin import TwinService
+from app.worlds import world_from_settings
 
 os.environ["LANGGRAPH_STRICT_MSGPACK"] = "true"
 ALLOWED_ORIGINS = {"http://127.0.0.1:5173", "http://localhost:5173"}
@@ -60,6 +62,10 @@ def create_app(settings: Settings | None = None, factory=None) -> FastAPI:
             else:
                 docker = DockerController(settings)
                 probes = Probes(settings, client)
+                twin_world = world_from_settings(settings, "twin")
+                twin_docker = DockerController(settings, twin_world)
+                twin_probes = Probes(settings, client, twin_world)
+                twin = TwinService(settings, twin_docker, twin_probes, store)
                 evidence = EvidenceAgent(settings, docker, probes)
                 provider = HolmesDiagnosisProvider(settings, client)
                 planner = LLMPlanner(settings, client)
@@ -72,6 +78,7 @@ def create_app(settings: Settings | None = None, factory=None) -> FastAPI:
                     probes,
                     saver,
                     settings,
+                    twin=twin,
                 )
                 service = Platform(
                     settings,
@@ -84,6 +91,7 @@ def create_app(settings: Settings | None = None, factory=None) -> FastAPI:
                     attachments=AttachmentService(
                         settings, DashScopeVisionProvider(settings, client)
                     ),
+                    twin=twin,
                 )
                 evaluation_service = EvaluationService(
                     settings,
@@ -96,6 +104,7 @@ def create_app(settings: Settings | None = None, factory=None) -> FastAPI:
                         settings, DashScopeVisionProvider(settings, client)
                     ),
                     planner=planner,
+                    twin=twin,
                 )
             app.state.platform = service
             app.state.evaluation = evaluation_service

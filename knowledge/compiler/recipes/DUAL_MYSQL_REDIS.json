@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "id": "rec_dc5413f5f3b3",
+  "title": "数据库探针失败且缓存探针失败",
+  "primitives": [
+    {
+      "kind": "life",
+      "service": "demo-mysql",
+      "verb": "stop"
+    },
+    {
+      "kind": "life",
+      "service": "demo-redis",
+      "verb": "stop"
+    }
+  ],
+  "recoverable": true,
+  "negative": false,
+  "poison": false,
+  "canonical_scene": "DUAL_MYSQL_REDIS",
+  "preferred_actions": [
+    "START_DEMO_MYSQL",
+    "START_DEMO_REDIS"
+  ],
+  "canonical_hash": "dc5413f5f3b3ad37b15543b54e279bba6a7c86f5659b9ee7d5c802ca4ecae7e3",
+  "holdout": false,
+  "compiler_version": 1,
+  "dirty": false,
+  "unsupported": false
+}

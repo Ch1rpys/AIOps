@@ -7,23 +7,49 @@ import { useEnvironment } from '../composables/environment';
 import { adminToken } from '../composables/session';
 import ServiceStatusBar from '../components/ServiceStatusBar.vue';
 import ProbeTable from '../components/ProbeTable.vue';
-import { serviceStatusText, shortId, shortTimeLabel, timeLabel } from '../display';
+import { serviceStatusText, shortId, shortTimeLabel, timeLabel, worldName } from '../display';
 
 const route = useRoute();
 const router = useRouter();
 const { health, loading, error, refresh } = useEnvironment();
 
-const tab = computed(() => (route.query.tab === 'probes' ? 'probes' : 'services'));
+const tab = computed(() =>
+  route.query.tab === 'probes'
+    ? 'probes'
+    : route.query.tab === 'twin'
+      ? 'twin'
+      : route.query.tab === 'logs'
+        ? 'logs'
+        : 'services',
+);
 const confirmation = ref(false);
 const busy = ref(false);
 const actionError = ref('');
 const message = ref('');
+const logWorld = ref<'primary' | 'twin'>('primary');
+const logService = ref('demo-mysql');
+const logText = ref('');
 let resetKey = crypto.randomUUID();
 
 const canReset = computed(
   () =>
     !!health.value?.admin_configured && !!adminToken.value.trim() && !busy.value && !loading.value,
 );
+
+const worldRows = computed(() => {
+  const rows: {
+    world: 'primary' | 'twin';
+    name: string;
+    service: { state: string; health: string; project: string };
+  }[] = [];
+  for (const [name, service] of Object.entries(health.value?.lab.services ?? {})) {
+    rows.push({ world: 'primary', name, service });
+  }
+  for (const [name, service] of Object.entries(health.value?.twin?.services ?? {})) {
+    rows.push({ world: 'twin', name, service });
+  }
+  return rows;
+});
 
 const integrations = computed(() =>
   health.value
@@ -70,6 +96,16 @@ async function reset() {
   } finally {
     busy.value = false;
     await refresh();
+  }
+}
+
+async function loadLogs() {
+  actionError.value = '';
+  try {
+    const payload = await api.worldLogs(logWorld.value, logService.value);
+    logText.value = payload.text;
+  } catch (cause) {
+    actionError.value = errorMessage(cause);
   }
 }
 </script>
@@ -153,6 +189,22 @@ async function reset() {
           >
             基线探针
           </button>
+          <button
+            type="button"
+            class="evidence-tab-btn"
+            :class="{ active: tab === 'twin' }"
+            @click="router.replace('/environment?tab=twin')"
+          >
+            影子世界
+          </button>
+          <button
+            type="button"
+            class="evidence-tab-btn"
+            :class="{ active: tab === 'logs' }"
+            @click="router.replace('/environment?tab=logs')"
+          >
+            分界日志
+          </button>
         </div>
         <span class="muted text-12"
           >采样时间: {{ health ? shortTimeLabel(health.lab.captured_at) : '—' }}</span
@@ -187,8 +239,70 @@ async function reset() {
         </div>
       </template>
 
-      <template v-else>
+      <template v-else-if="tab === 'probes'">
         <ProbeTable :probes="health?.lab.probes ?? []" />
+      </template>
+
+      <template v-else-if="tab === 'twin'">
+        <p class="help-text">
+          {{ worldName('twin') }} · 锁 {{ health?.twin?.locked ? '占用中' : '空闲' }} · 项目
+          {{ health?.twin?.compose_project || 'aiops-twin' }} ·
+          {{ health?.twin?.status || 'UNKNOWN' }}
+        </p>
+        <div v-if="worldRows.length < 8" class="empty compact">
+          影子未取得完整八个容器。启动失败时旧六场景仍可用，但不得声称做过试修。
+        </div>
+        <div v-else class="table-scroll">
+          <table class="probe-table">
+            <thead>
+              <tr>
+                <th>世界</th>
+                <th>容器服务</th>
+                <th>状态</th>
+                <th>项目</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in worldRows" :key="`${row.world}-${row.name}`">
+                <td>{{ worldName(row.world) }}</td>
+                <td class="mono">
+                  <strong>{{ row.name }}</strong>
+                </td>
+                <td>{{ serviceStatusText(row.service.state, row.service.health) }}</td>
+                <td class="mono muted text-12">{{ row.service.project }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div style="margin-top: 12px">
+          <ProbeTable :probes="health?.twin?.probes ?? []" />
+        </div>
+      </template>
+
+      <template v-else>
+        <p class="help-text">日志采集带 World，不会读到另一套 Compose 项目。</p>
+        <div class="filter-bar">
+          <label>
+            世界
+            <select v-model="logWorld">
+              <option value="primary">真环境</option>
+              <option value="twin">影子</option>
+            </select>
+          </label>
+          <label>
+            服务
+            <select v-model="logService">
+              <option>demo-mysql</option>
+              <option>demo-redis</option>
+              <option>demo-app</option>
+              <option>demo-nginx</option>
+            </select>
+          </label>
+          <ElButton @click="loadLogs">读取</ElButton>
+        </div>
+        <pre class="mono text-12" style="margin-top: 12px; white-space: pre-wrap">{{
+          logText || '尚未读取。'
+        }}</pre>
       </template>
     </section>
 
@@ -204,6 +318,10 @@ async function reset() {
       <dl class="metadata-list" style="margin-bottom: 16px">
         <dt>隔离项目</dt>
         <dd class="mono">{{ health?.lab.compose_project || '未取得' }}</dd>
+        <dt>影子项目</dt>
+        <dd class="mono">{{ health?.twin?.compose_project || 'aiops-twin' }}</dd>
+        <dt>影子锁</dt>
+        <dd>{{ health?.twin?.locked ? '占用中' : '空闲' }}</dd>
         <dt>数据模式</dt>
         <dd>{{ health?.mode || 'UNKNOWN' }}</dd>
         <dt>实验租约</dt>
@@ -222,7 +340,7 @@ async function reset() {
       </dl>
 
       <div class="notice" style="margin-bottom: 14px">
-        重置将恢复四个 demo 服务并重新执行基线探针。
+        重置将同时收回真环境和影子，并重新执行真环境基线探针。
       </div>
 
       <ElButton
@@ -247,8 +365,8 @@ async function reset() {
   <!-- 重置确认弹窗 (V1-12) -->
   <ElDialog v-model="confirmation" title="确认重置演示环境" width="min(440px, 92vw)">
     <p style="font-size: 14px; line-height: 22px">
-      将启动隔离项目内的
-      <strong>demo-mysql、demo-redis、demo-app 和 demo-nginx</strong>，并重新执行全部基线探针。
+      将启动真环境与影子里的
+      <strong>demo-mysql、demo-redis、demo-app 和 demo-nginx</strong>，并重新执行真环境基线探针。
     </p>
     <p class="help-text" style="margin-top: 8px">
       {{

@@ -1,6 +1,9 @@
+from types import SimpleNamespace
+
 import pytest
 from app.agents.evidence import EvidenceAgent
-from app.config import COMPOSE_PROJECT, SERVICES, Settings
+from app.config import COMPOSE_PROJECT, ROOT, SERVICES, Settings
+from app.worlds import PRIMARY_APP_MODE, PRIMARY_NGINX_ACTIVE
 from app.graph.workflow import Workflow
 from app.main import create_app
 from app.schemas.domain import (
@@ -81,7 +84,18 @@ class TestWorld:
         self.planner_error = False
         self.vision_observation = VisionObservation()
         self.vision_error = None
-
+        self.world = SimpleNamespace(
+            name="primary",
+            project=COMPOSE_PROJECT,
+            compose_file=ROOT / "deploy/docker-compose.yml",
+            mysql_port=13306,
+            redis_port=16379,
+            app_url="http://127.0.0.1:18000",
+            nginx_url="http://127.0.0.1:18080",
+            nginx_active=PRIMARY_NGINX_ACTIVE,
+            app_mode_file=PRIMARY_APP_MODE,
+            network="aiops-demo_default",
+        )
     @property
     def stopped_service(self) -> str | None:
         if not self._stopped:
@@ -130,20 +144,12 @@ class TestWorld:
         self.operations.append(("mysql", statement_id))
         return {"exit_code": 0, "operation": "mysql", "statement_id": statement_id}
 
-    def reset_demo_password(self):
-        self.operations.append(("mysql-password", "reset"))
-        return {"exit_code": 0, "operation": "mysql_password"}
-
     def apply_redis_operation(self, operation):
         self.operations.append(("redis", operation))
         return {"exit_code": 0, "operation": "redis", "redis_op": operation}
 
-    def network(self, service, operation):
-        self.operations.append(("net", service, operation))
-        return {"exit_code": 0, "operation": "net"}
-
     def apply_nginx_upstream(self, profile):
-        if profile not in {"healthy", "misdirected"}:
+        if profile not in {"healthy", "misdirected", "mysql", "blackhole"}:
             raise ValueError(profile)
         self.nginx_profile = profile
         self.operations.append(("nginx-upstream", profile))
@@ -155,7 +161,7 @@ class TestWorld:
         }
 
     def apply_app_mode(self, mode):
-        if mode not in {"ok", "http_500"}:
+        if mode not in {"ok", "http_500", "slow", "empty", "wrong_json"}:
             raise ValueError(mode)
         self.app_mode = mode
         self.operations.append(("app-mode", mode))
@@ -253,8 +259,11 @@ class TestWorld:
             raise DomainError("AI_UNAVAILABLE", "TEST/MOCK 规划器不可用", 503)
         from app.scenarios import SCENARIOS
 
-        scenario = Scenario(context.get("scenario_key", "MYSQL_DOWN"))
-        definition = SCENARIOS[scenario]
+        try:
+            scenario = Scenario(context.get("scenario_key", "MYSQL_DOWN"))
+            definition = SCENARIOS[scenario]
+        except ValueError:
+            definition = SCENARIOS[Scenario.MYSQL_DOWN]
         action = self.actions.pop(0) if self.actions else self.action
         if action == "START_DEMO_MYSQL" and definition.action != action:
             action = definition.action
@@ -331,7 +340,9 @@ class TestWorld:
 
     def factory(self, settings, store, saver, client):
         evidence = EvidenceAgent(settings, self, self)
-        workflow = Workflow(store, evidence, self, self, ActionExecutor(store, self), self, saver)
+        workflow = Workflow(
+            store, evidence, self, self, ActionExecutor(store, self), self, saver, twin=None
+        )
         attachments = AttachmentService(settings, self)
         platform = Platform(
             settings,
@@ -343,6 +354,7 @@ class TestWorld:
             client,
             mode="TEST/MOCK",
             attachments=attachments,
+            twin=None,
         )
         evaluation = EvaluationService(
             settings, store, self, self, evidence, self, attachments=attachments, planner=self
@@ -370,6 +382,55 @@ def settings(tmp_path):
 @pytest.fixture
 def client(settings, world):
     with TestClient(create_app(settings, world.factory)) as client:
+        client.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
+        yield client
+
+
+@pytest.fixture
+def twin_client(settings, world):
+    from app.services.twin import TwinService
+
+    def factory(settings, store, saver, client):
+        evidence = EvidenceAgent(settings, world, world)
+        twin = TwinService(settings, world, world, store)
+        workflow = Workflow(
+            store,
+            evidence,
+            world,
+            world,
+            ActionExecutor(store, world),
+            world,
+            saver,
+            settings,
+            twin=twin,
+        )
+        attachments = AttachmentService(settings, world)
+        platform = Platform(
+            settings,
+            store,
+            world,
+            world,
+            evidence,
+            workflow,
+            client,
+            mode="TEST/MOCK",
+            attachments=attachments,
+            twin=twin,
+        )
+        evaluation = EvaluationService(
+            settings,
+            store,
+            world,
+            world,
+            evidence,
+            world,
+            attachments=attachments,
+            planner=world,
+            twin=twin,
+        )
+        return platform, evaluation
+
+    with TestClient(create_app(settings, factory)) as client:
         client.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         yield client
 

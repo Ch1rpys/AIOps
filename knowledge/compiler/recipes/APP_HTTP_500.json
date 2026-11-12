@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "id": "rec_fefe4aaef11c",
+  "title": "代理探针失败",
+  "primitives": [
+    {
+      "kind": "app_mode",
+      "mode": "http_500"
+    }
+  ],
+  "recoverable": false,
+  "negative": false,
+  "poison": false,
+  "canonical_scene": "APP_HTTP_500",
+  "preferred_actions": [
+    "RESTORE_APP_MODE"
+  ],
+  "canonical_hash": "fefe4aaef11c005b479191ec210a1c977989f06e1fd93b708dc75ef31d8e9c54",
+  "holdout": false,
+  "compiler_version": 1,
+  "dirty": false,
+  "unsupported": false
+}
