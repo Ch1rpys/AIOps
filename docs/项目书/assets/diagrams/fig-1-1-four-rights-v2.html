@@ -1,0 +1,71 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: #fff; }
+#canvas { position: relative; background: #fff; overflow: hidden;
+  font-family: "PingFang SC", "Hiragino Sans GB", "Heiti SC", sans-serif;
+  color: #0f172a; -webkit-font-smoothing: antialiased; }
+.card { position: absolute; background: #fff; border: 1px solid #dbe3ee;
+  border-radius: 11px; box-shadow: 0 5px 14px rgba(15,23,42,.05); }
+.tag { display: inline-block; padding: 2px 7px; border-radius: 999px;
+  font-size: 9.5px; font-weight: 700; letter-spacing: .03em; }
+</style></head>
+<body><div id="canvas" style="width:900px;height:600px">
+<div style="position:absolute;left:20px;top:18px;font-size:10.5px;letter-spacing:.16em;color:#94a3b8;font-weight:700">处置链 · 四权分立</div>
+<div style="position:absolute;left:20px;top:36px;font-size:20px;font-weight:700">判断权、执行权、批准权、判决权，彼此不越界</div>
+<div style="position:absolute;left:20px;top:66px;font-size:11.5px;color:#64748b">模型只出判断，程序只执行登记动作，人保留批准权，探针保留最终判决权。</div>
+
+<div class="card" style="left:20px;top:100px;width:278px;height:180px;padding:12px 14px;border-top:3px solid #64748b">
+  <div class="tag" style="background:#f1f5f9;color:#64748b">01 · 现场</div>
+  <div style="font-size:16px;font-weight:700;margin-top:7px">真实故障</div>
+  <div style="margin-top:6px;font-size:11px;line-height:1.65;color:#475569">
+    <div>· Docker 隔离环境</div><div>· 容器真停 · 接口真 502</div><div>· 不是回放日志或动画</div>
+  </div>
+  <div style="position:absolute;left:14px;bottom:9px;width:248px;border-top:1px dashed #fecaca;padding-top:4px;font-size:9.5px;color:#b91c1c">禁止：用预录日志代替真实故障</div>
+</div><div style="position:absolute;left:300px;top:180px;font-size:18px;color:#94a3b8">→</div>
+<div class="card" style="left:311px;top:100px;width:278px;height:180px;padding:12px 14px;border-top:3px solid #2563eb">
+  <div class="tag" style="background:#eff6ff;color:#2563eb">02 · 证据</div>
+  <div style="font-size:16px;font-weight:700;margin-top:7px">可引用的观测</div>
+  <div style="margin-top:6px;font-size:11px;line-height:1.65;color:#475569">
+    <div>· 容器状态 + 6 个探针</div><div>· 日志 + Runbook + 截图</div><div>· 每条证据带 id 与时间</div>
+  </div>
+  <div style="position:absolute;left:14px;bottom:9px;width:248px;border-top:1px dashed #fecaca;padding-top:4px;font-size:9.5px;color:#b91c1c">禁止：引用不存在的证据 id</div>
+</div><div style="position:absolute;left:591px;top:180px;font-size:18px;color:#94a3b8">→</div>
+<div class="card" style="left:602px;top:100px;width:278px;height:180px;padding:12px 14px;border-top:3px solid #7c3aed">
+  <div class="tag" style="background:#f5f3ff;color:#7c3aed">03 · 模型</div>
+  <div style="font-size:16px;font-weight:700;margin-top:7px">只提议，不动手</div>
+  <div style="margin-top:6px;font-size:11px;line-height:1.65;color:#475569">
+    <div>· HolmesGPT 诊断根因</div><div>· 独立 Planner 报动作编号</div><div>· 只能引用目录，不得执行</div>
+  </div>
+  <div style="position:absolute;left:14px;bottom:9px;width:248px;border-top:1px dashed #fecaca;padding-top:4px;font-size:9.5px;color:#b91c1c">禁止：直接调用工具或执行命令</div>
+</div>
+<div class="card" style="left:20px;top:295px;width:278px;height:180px;padding:12px 14px;border-top:3px solid #b45309">
+  <div class="tag" style="background:#fffbeb;color:#b45309">04 · 人</div>
+  <div style="font-size:16px;font-weight:700;margin-top:7px">计划级批准</div>
+  <div style="margin-top:6px;font-size:11px;line-height:1.65;color:#475569">
+    <div>· 本机管理员令牌</div><div>· 核对 plan_id 与目标</div><div>· 批准前真环境零副作用</div>
+  </div>
+  <div style="position:absolute;left:14px;bottom:9px;width:248px;border-top:1px dashed #fecaca;padding-top:4px;font-size:9.5px;color:#b91c1c">禁止：复用上一轮的旧批准</div>
+</div><div style="position:absolute;left:300px;top:375px;font-size:18px;color:#94a3b8">→</div>
+<div class="card" style="left:311px;top:295px;width:278px;height:180px;padding:12px 14px;border-top:3px solid #0f766e">
+  <div class="tag" style="background:#f0fdfa;color:#0f766e">05 · 程序</div>
+  <div style="font-size:16px;font-weight:700;margin-top:7px">目录内执行</div>
+  <div style="margin-top:6px;font-size:11px;line-height:1.65;color:#475569">
+    <div>· 3046 条动作目录</div><div>· 参数固定 · 无 shell</div><div>· 四道核验后才执行</div>
+  </div>
+  <div style="position:absolute;left:14px;bottom:9px;width:248px;border-top:1px dashed #fecaca;padding-top:4px;font-size:9.5px;color:#b91c1c">禁止：shell / 任意 SQL / 任意路径</div>
+</div><div style="position:absolute;left:591px;top:375px;font-size:18px;color:#94a3b8">→</div>
+<div class="card" style="left:602px;top:295px;width:278px;height:180px;padding:12px 14px;border-top:3px solid #15803d">
+  <div class="tag" style="background:#f0fdf4;color:#15803d">06 · 探针</div>
+  <div style="font-size:16px;font-weight:700;margin-top:7px">独立裁决</div>
+  <div style="margin-top:6px;font-size:11px;line-height:1.65;color:#475569">
+    <div>· 同一轮双探针 PASS</div><div>· PASS / FAIL / UNKNOWN</div><div>· 模型自述不算数</div>
+  </div>
+  <div style="position:absolute;left:14px;bottom:9px;width:248px;border-top:1px dashed #fecaca;padding-top:4px;font-size:9.5px;color:#b91c1c">禁止：以模型自述判定恢复</div>
+</div>
+<div style="position:absolute;left:20px;top:500px;width:860px;height:42px;border-radius:9px;background:#0f172a;color:#e2e8f0;padding:8px 14px">
+  <span style="font-size:11px;font-weight:700">只追加审计 · 按 rowid 回放</span>
+  <span style="font-size:10px;color:#94a3b8;margin-left:10px">现场 → 证据 → 诊断 → 计划 → 审批 → 执行 → 复测；失败与拒答同样落库。</span>
+</div>
+<div style="position:absolute;left:20px;top:554px;font-size:9.8px;color:#b45309">← 复测 FAIL：开新一轮，新计划、重新审批；旧批准不复用，同一动作成功过就不再执行。</div>
+<div style="position:absolute;left:20px;top:575px;font-size:9.8px;color:#94a3b8">UNKNOWN ≠ FAIL：缺失必需探针或观测未知时明确说“不知道”，不猜、不声称恢复。</div>
+</div></body></html>

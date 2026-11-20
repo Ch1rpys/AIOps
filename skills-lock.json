@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "skills": {
+    "create-video": {
+      "source": "djalmajr/skills",
+      "commit": "99027176f5a7ba1ae45d2feb05decc5d2ae127fb",
+      "sourceType": "github",
+      "skillPath": "skills/create-video/SKILL.md",
+      "computedHash": "a645340c3174a12fa6efffdeefa6b64cc9cef22a653685870954f3d09f89a3c2",
+      "installMode": "copy"
+    }
+  }
+}

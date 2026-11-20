@@ -1,0 +1,57 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: #fff; }
+#canvas { position: relative; background: #fff; overflow: hidden;
+  font-family: "PingFang SC", "Hiragino Sans GB", "Heiti SC", sans-serif;
+  color: #0f172a; -webkit-font-smoothing: antialiased; }
+.card { position: absolute; background: #fff; border: 1px solid #dbe3ee;
+  border-radius: 11px; box-shadow: 0 5px 14px rgba(15,23,42,.05); }
+.tag { display: inline-block; padding: 2px 7px; border-radius: 999px;
+  font-size: 9.5px; font-weight: 700; letter-spacing: .03em; }
+</style></head>
+<body><div id="canvas" style="width:900px;height:300px">
+<div style="position:absolute;left:20px;top:16px;font-size:10.5px;letter-spacing:.16em;color:#94a3b8;font-weight:700">工作流 · 九节点七分支</div>
+<div style="position:absolute;left:20px;top:34px;font-size:20px;font-weight:700">采证 → 诊断 → 许可 → 规划 → 审批 → 执行 → 复测</div>
+<div style="position:absolute;left:20px;top:64px;font-size:11px;color:#64748b">补采是诊断子图唯一回边；采证重试与复测新一轮另算。</div>
+
+<div class="card" style="left:20px;top:92px;width:108px;height:66px;padding:7px 9px;border-top:3px solid #0891b2">
+  <div style="font-size:8px;font-weight:700;color:#0891b2;letter-spacing:.08em">01</div>
+  <div style="font-size:13px;font-weight:700;margin-top:2px">采集</div>
+  <div style="font-size:9px;color:#64748b;margin-top:1px">容器+6 探针</div>
+</div><div style="position:absolute;left:130px;top:115px;font-size:14px;color:#94a3b8">→</div>
+<div class="card" style="left:145px;top:92px;width:108px;height:66px;padding:7px 9px;border-top:3px solid #7c3aed">
+  <div style="font-size:8px;font-weight:700;color:#7c3aed;letter-spacing:.08em">02</div>
+  <div style="font-size:13px;font-weight:700;margin-top:2px">诊断</div>
+  <div style="font-size:9px;color:#64748b;margin-top:1px">HolmesGPT</div>
+</div><div style="position:absolute;left:255px;top:115px;font-size:14px;color:#94a3b8">→</div>
+<div class="card" style="left:270px;top:92px;width:108px;height:66px;padding:7px 9px;border-top:3px solid #b45309">
+  <div style="font-size:8px;font-weight:700;color:#b45309;letter-spacing:.08em">03</div>
+  <div style="font-size:13px;font-weight:700;margin-top:2px">执行许可</div>
+  <div style="font-size:9px;color:#64748b;margin-top:1px">拓扑规则对账</div>
+</div><div style="position:absolute;left:380px;top:115px;font-size:14px;color:#94a3b8">→</div>
+<div class="card" style="left:395px;top:92px;width:108px;height:66px;padding:7px 9px;border-top:3px solid #2563eb">
+  <div style="font-size:8px;font-weight:700;color:#2563eb;letter-spacing:.08em">04</div>
+  <div style="font-size:13px;font-weight:700;margin-top:2px">规划</div>
+  <div style="font-size:9px;color:#64748b;margin-top:1px">独立 Planner</div>
+</div><div style="position:absolute;left:505px;top:115px;font-size:14px;color:#94a3b8">→</div>
+<div class="card" style="left:520px;top:92px;width:108px;height:66px;padding:7px 9px;border-top:3px solid #b45309">
+  <div style="font-size:8px;font-weight:700;color:#b45309;letter-spacing:.08em">05</div>
+  <div style="font-size:13px;font-weight:700;margin-top:2px">审批</div>
+  <div style="font-size:9px;color:#64748b;margin-top:1px">interrupt</div>
+</div><div style="position:absolute;left:630px;top:115px;font-size:14px;color:#94a3b8">→</div>
+<div class="card" style="left:645px;top:92px;width:108px;height:66px;padding:7px 9px;border-top:3px solid #0f766e">
+  <div style="font-size:8px;font-weight:700;color:#0f766e;letter-spacing:.08em">06</div>
+  <div style="font-size:13px;font-weight:700;margin-top:2px">执行</div>
+  <div style="font-size:9px;color:#64748b;margin-top:1px">目录动作</div>
+</div><div style="position:absolute;left:755px;top:115px;font-size:14px;color:#94a3b8">→</div>
+<div class="card" style="left:770px;top:92px;width:108px;height:66px;padding:7px 9px;border-top:3px solid #15803d">
+  <div style="font-size:8px;font-weight:700;color:#15803d;letter-spacing:.08em">07</div>
+  <div style="font-size:13px;font-weight:700;margin-top:2px">复测</div>
+  <div style="font-size:9px;color:#64748b;margin-top:1px">同轮双探针</div>
+</div>
+<div style="position:absolute;left:20px;top:182px;font-size:9.5px;color:#b45309">注：03 是规则门禁，不调模型；补采在 02 与 03 之间，最多 2 轮、单轮 2 项、总 45 秒。</div>
+<div style="position:absolute;left:20px;top:210px;width:860px;border-top:1px dashed #cbd5e1"></div>
+<div style="position:absolute;left:20px;top:222px;font-size:10px;color:#b45309">FAIL 且 attempt &lt; 2：从 07 回到 01，开新一轮；新计划必须重新审批，旧批准不复用。</div>
+<div style="position:absolute;left:20px;top:244px;font-size:10px;color:#15803d">PASS → RESOLVED　　FAIL（第二轮）→ FAILED　　UNKNOWN → 结束，不猜。</div>
+<div style="position:absolute;left:20px;top:272px;font-size:9.5px;color:#94a3b8">模型不可用但探针已证实故障：改走注册恢复动作，仍停在等待审批，不自动执行。</div>
+</div></body></html>
